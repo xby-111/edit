@@ -11,7 +11,7 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 # Database configuration
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql+psycopg2://user:password@localhost:5432/mydb"
+    "postgresql+psycopg2://omm:Guass000@localhost:5432/postgres"
 )
 
 # Create engine and session
