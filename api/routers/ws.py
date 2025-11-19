@@ -22,7 +22,8 @@ WebSocket 协作编辑器协议文档
      "type": "cursor",
      "cursor": {
        "position": <int>  # 光标在文本中的位置
-     }
+     },
+     "user_id": <int>  # 发送光标的用户ID
    }
 
 3. 初始化消息 (服务器发送):
@@ -41,11 +42,12 @@ WebSocket 协作编辑器协议文档
 router = APIRouter()
 manager = ConnectionManager()
 
-@router.websocket("/documents/{document_id}")
-async def websocket_document_endpoint(websocket: WebSocket, document_id: int):
-    # 用匿名用户ID 0
-    user_id = 0
-    
+@router.websocket("/documents/{document_id}")
+async def websocket_document_endpoint(websocket: WebSocket, document_id: int):
+    # 生成唯一的用户ID
+    import time
+    user_id = int(time.time() * 1000000) % 1000000  # 使用时间戳的微秒部分生成唯一ID
+
     # 获取数据库会话以获取文档内容
     db: Session = next(get_db())
     try:
@@ -56,45 +58,46 @@ async def websocket_document_endpoint(websocket: WebSocket, document_id: int):
         await manager.connect(websocket, document_id, user_id, initial_content)
         
         try:
-            while True:
-                data = await websocket.receive_json()
-                print("WS recv:", data, "from user", user_id, "in doc", document_id)
-
-                # 处理内容更新消息
-                if data["type"] == "content":
-                    # 更新数据库中的文档内容
-                    document = db.query(Document).filter(Document.id == document_id).first()
-                    if document:
-                        document.content = data["content"]
-                        document.updated_at = func.now()  # 更新时间
-                        db.commit()
-                        db.refresh(document)
-                    
-                    # 广播内容更新给房间内的其他用户
-                    broadcast_data = {
-                        "type": "content",
-                        "content": data["content"]
-                    }
-                    print("WS broadcast:", broadcast_data, "to room", document_id)
-                    await manager.broadcast_to_room(
-                        document_id,
-                        broadcast_data,
-                        user_id,
-                        websocket
-                    )
-            
-                elif data["type"] == "cursor":
-                    # 广播光标位置更新给房间内的其他用户
-                    broadcast_data = {
-                        "type": "cursor",
-                        "cursor": data["cursor"]
-                    }
-                    print("WS broadcast:", broadcast_data, "to room", document_id)
-                    await manager.broadcast_to_room(
-                        document_id,
-                        broadcast_data,
-                        user_id,
-                        websocket
+            while True:
+                data = await websocket.receive_json()
+                print("WS recv:", data, "from user", user_id, "in doc", document_id)
+
+                # 处理内容更新消息
+                if data["type"] == "content":
+                    # 更新数据库中的文档内容
+                    document = db.query(Document).filter(Document.id == document_id).first()
+                    if document:
+                        document.content = data["content"]
+                        document.updated_at = func.now()  # 更新时间
+                        db.commit()
+                        db.refresh(document)
+                    
+                    # 广播内容更新给房间内的其他用户
+                    broadcast_data = {
+                        "type": "content",
+                        "content": data["content"]
+                    }
+                    print("WS broadcast:", broadcast_data, "to room", document_id)
+                    await manager.broadcast_to_room(
+                        document_id,
+                        broadcast_data,
+                        user_id,
+                        websocket
+                    )
+            
+                elif data["type"] == "cursor":
+                    # 广播光标位置更新给房间内的其他用户，包含用户ID
+                    broadcast_data = {
+                        "type": "cursor",
+                        "cursor": data["cursor"],
+                        "user_id": user_id  # 添加用户ID信息
+                    }
+                    print("WS broadcast:", broadcast_data, "to room", document_id)
+                    await manager.broadcast_to_room(
+                        document_id,
+                        broadcast_data,
+                        user_id,
+                        websocket
                     )
 
         except WebSocketDisconnect:
