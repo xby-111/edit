@@ -1,187 +1,360 @@
 """
-用户服务层 - 不直接提交事务，由调用方控制
+用户服务层 - 使用 py-opengauss 直接 SQL 操作
 """
 import logging
-from sqlalchemy.orm import Session
-from models import User
-from schemas import UserCreate
+from app.schemas import UserCreate
 from app.core.security import get_password_hash
 from datetime import datetime
+import random
+from datetime import timedelta
 
 logger = logging.getLogger(__name__)
 
-def get_user(db: Session, user_id: int):
-    """获取用户（不提交事务）"""
-    return db.query(User).filter(User.id == user_id).first()
+def _escape(value: str | None) -> str:
+    """简单转义单引号，避免 SQL 语法错误（内部使用即可）"""
+    if value is None:
+        return "NULL"
+    escaped_value = value.replace("'", "''")
+    return f"'{escaped_value}'"
 
-def get_user_by_username(db: Session, username: str):
-    """通过用户名获取用户（不提交事务）"""
-    return db.query(User).filter(User.username == username).first()
+def _format_bool(value: bool | None) -> str:
+    """格式化布尔值为 SQL 字符串"""
+    if value is None:
+        return "NULL"
+    return "TRUE" if value else "FALSE"
 
-def get_user_by_email(db: Session, email: str):
-    """通过邮箱获取用户（不提交事务）"""
-    return db.query(User).filter(User.email == email).first()
+def _format_datetime(dt: datetime | None) -> str:
+    """格式化日期时间为 SQL 字符串"""
+    if dt is None:
+        return "NULL"
+    return f"'{dt.strftime('%Y-%m-%d %H:%M:%S')}'"
 
-def get_user_by_phone(db: Session, phone: str):
-    """通过手机号获取用户（不提交事务）"""
-    return db.query(User).filter(User.phone == phone).first()
+def get_user(db, user_id: int):
+    """获取用户 - 使用 py-opengauss 的 query 方法"""
+    # 使用 py-opengauss 的 query 方法查询
+    rows = db.query(f"SELECT id, username, email, phone, is_active, role, avatar_url, full_name, bio, address, phone_secondary, created_at, updated_at FROM users WHERE id = {user_id} LIMIT 1")
+    
+    if rows:
+        result = rows[0]  # 取第一行
+        return {
+            'id': result[0],
+            'username': result[1],
+            'email': result[2],
+            'phone': result[3],
+            'is_active': result[4],
+            'role': result[5],
+            'avatar_url': result[6],
+            'full_name': result[7],
+            'bio': result[8],
+            'address': result[9],
+            'phone_secondary': result[10],
+            'created_at': result[11],
+            'updated_at': result[12]
+        }
+    return None
 
-def get_users(db: Session, skip: int = 0, limit: int = 100):
-    """获取用户列表（不提交事务）"""
-    return db.query(User).offset(skip).limit(limit).all()
+def get_user_by_username(db, username: str):
+    """通过用户名获取用户 - 使用 py-opengauss 的 query 方法"""
+    username_safe = _escape(username)
+    # 使用 py-opengauss 的 query 方法查询
+    rows = db.query(f"SELECT id, username, email, phone, is_active, role, hashed_password, created_at, updated_at FROM users WHERE username = {username_safe} LIMIT 1")
+    
+    if rows:
+        result = rows[0]  # 取第一行
+        return {
+            'id': result[0],
+            'username': result[1],
+            'email': result[2],
+            'phone': result[3],
+            'is_active': result[4],
+            'role': result[5],
+            'hashed_password': result[6],
+            'created_at': result[7],
+            'updated_at': result[8]
+        }
+    return None
 
-def create_user(db: Session, user: UserCreate, commit: bool = False):
+def get_user_by_email(db, email: str):
+    """通过邮箱获取用户 - 使用 py-opengauss 的 query 方法"""
+    email_safe = _escape(email)
+    # 使用 py-opengauss 的 query 方法查询
+    rows = db.query(f"SELECT id, username, email, phone, is_active, role, created_at, updated_at FROM users WHERE email = {email_safe} LIMIT 1")
+    
+    if rows:
+        result = rows[0]  # 取第一行
+        return {
+            'id': result[0],
+            'username': result[1],
+            'email': result[2],
+            'phone': result[3],
+            'is_active': result[4],
+            'role': result[5],
+            'created_at': result[6],
+            'updated_at': result[7]
+        }
+    return None
+
+def get_user_by_phone(db, phone: str):
+    """通过手机号获取用户 - 使用 py-opengauss 的 query 方法"""
+    phone_safe = _escape(phone)
+    # 使用 py-opengauss 的 query 方法查询
+    rows = db.query(f"SELECT id, username, email, phone, is_active, role, created_at, updated_at FROM users WHERE phone = {phone_safe} LIMIT 1")
+    
+    if rows:
+        result = rows[0]  # 取第一行
+        return {
+            'id': result[0],
+            'username': result[1],
+            'email': result[2],
+            'phone': result[3],
+            'is_active': result[4],
+            'role': result[5],
+            'created_at': result[6],
+            'updated_at': result[7]
+        }
+    return None
+
+def get_users(db, skip: int = 0, limit: int = 100):
+    """获取用户列表 - 使用 py-opengauss 的 query 方法"""
+    # 使用 py-opengauss 的 query 方法查询
+    rows = db.query(f"SELECT id, username, email, phone, is_active, role, created_at, updated_at FROM users ORDER BY id LIMIT {limit} OFFSET {skip}")
+    
+    users = []
+    for result in rows:
+        users.append({
+            'id': result[0],
+            'username': result[1],
+            'email': result[2],
+            'phone': result[3],
+            'is_active': result[4],
+            'role': result[5],
+            'created_at': result[6],
+            'updated_at': result[7]
+        })
+    return users
+
+def create_user(db, user: UserCreate):
     """
-    创建新用户
+    创建新用户 - 使用 py-opengauss 的 execute 方法
     
     Args:
-        db: 数据库会话
+        db: 数据库连接
         user: 用户创建数据
-        commit: 是否立即提交事务（默认False，由调用方控制）
         
     Returns:
         创建的用户对象
     """
     hashed_password = get_password_hash(user.password)
-    db_user = User(
-        username=user.username,
-        email=user.email,
-        phone=getattr(user, 'phone', None),
-        hashed_password=hashed_password,
-        is_active=user.is_active if user.is_active is not None else True,
-        role=user.role if user.role else "viewer"
-    )
-    db.add(db_user)
-    if commit:
-        db.commit()
-        db.refresh(db_user)
-    return db_user
+    now = datetime.utcnow()
+    
+    # 构造安全的 SQL 字符串
+    username_safe = _escape(user.username)
+    email_safe = _escape(user.email)
+    phone_value = getattr(user, 'phone', None)
+    phone_safe = _escape(phone_value) if phone_value else "NULL"
+    is_active_sql = _format_bool(user.is_active if user.is_active is not None else True)
+    role_safe = _escape(user.role if user.role else "viewer")
+    now_sql = _format_datetime(now)
+    
+    # 使用 py-opengauss 的 execute 方法插入用户数据
+    db.execute(f"""
+        INSERT INTO users (username, email, phone, hashed_password, is_active, role, created_at, updated_at) 
+        VALUES ({username_safe}, {email_safe}, {phone_safe}, '{hashed_password}', {is_active_sql}, {role_safe}, {now_sql}, {now_sql})
+    """)
+    
+    # 获取刚插入的用户数据
+    rows = db.query(f"SELECT id, username, email, phone, is_active, role, created_at, updated_at FROM users WHERE username = {username_safe} ORDER BY id DESC LIMIT 1")
+    
+    if rows:
+        result = rows[0]
+        return {
+            'id': result[0],
+            'username': result[1],
+            'email': result[2],
+            'phone': result[3],
+            'is_active': result[4],
+            'role': result[5],
+            'created_at': result[6],
+            'updated_at': result[7]
+        }
+    return None
 
-def update_user(db: Session, user_id: int, user_update, commit: bool = False):
+def update_user(db, user_id: int, user_update):
     """
-    更新用户信息
+    更新用户信息 - 使用 py-opengauss 的 execute 方法
     
     Args:
-        db: 数据库会话
+        db: 数据库连接
         user_id: 用户ID
         user_update: 更新数据
-        commit: 是否立即提交事务（默认False）
         
     Returns:
         更新后的用户对象，如果用户不存在返回None
     """
-    db_user = db.query(User).filter(User.id == user_id).first()
-    if db_user:
-        # Update only the fields that are provided in the update request
-        for field, value in user_update.model_dump(exclude_unset=True).items():
-            setattr(db_user, field, value)
-        db_user.updated_at = datetime.utcnow()
-        if commit:
-            db.commit()
-            db.refresh(db_user)
-        return db_user
-    return None
+    # 检查用户是否存在
+    user = get_user(db, user_id)
+    if not user:
+        return None
+    
+    # 构建更新语句
+    update_fields = []
+    
+    # 获取更新数据
+    update_data = {}
+    if hasattr(user_update, 'model_dump'):
+        update_data = user_update.model_dump(exclude_unset=True)
+    elif hasattr(user_update, '__dict__'):
+        update_data = user_update.__dict__
+    
+    # 构建更新字段
+    for field, value in update_data.items():
+        if field not in ['id', 'created_at', 'hashed_password']:  # 不更新这些字段
+            if field in ['username', 'email', 'phone', 'full_name', 'bio', 'address', 'avatar_url']:
+                # 字符串字段
+                value_safe = _escape(value)
+                update_fields.append(f"{field} = {value_safe}")
+            elif field in ['is_active']:
+                # 布尔字段
+                value_sql = _format_bool(value)
+                update_fields.append(f"{field} = {value_sql}")
+            else:
+                # 其他字段
+                value_safe = _escape(str(value))
+                update_fields.append(f"{field} = {value_safe}")
+    
+    # 添加更新时间
+    update_fields.append(f"updated_at = {_format_datetime(datetime.utcnow())}")
+    
+    if update_fields:
+        # 使用 py-opengauss 的 execute 方法更新
+        sql = f"UPDATE users SET {', '.join(update_fields)} WHERE id = {user_id}"
+        db.execute(sql)
+    
+    # 返回更新后的用户数据
+    return get_user(db, user_id)
 
-def delete_user(db: Session, user_id: int, commit: bool = False):
+def delete_user(db, user_id: int):
     """
-    删除用户
+    删除用户 - 使用 py-opengauss 的 execute 方法
     
     Args:
-        db: 数据库会话
+        db: 数据库连接
         user_id: 用户ID
-        commit: 是否立即提交事务（默认False）
         
     Returns:
         是否删除成功
     """
-    db_user = db.query(User).filter(User.id == user_id).first()
-    if db_user:
-        db.delete(db_user)
-        if commit:
-            db.commit()
-        return True
-    return False
+    # 检查用户是否存在
+    user = get_user(db, user_id)
+    if not user:
+        return False
+    
+    # 使用 py-opengauss 的 execute 方法删除用户
+    db.execute(f"DELETE FROM users WHERE id = {user_id}")
+    return True
 
-def update_user_password(db: Session, user_id: int, new_password: str, commit: bool = False):
-    """更新用户密码"""
-    user = db.query(User).filter(User.id == user_id).first()
+def update_user_password(db, user_id: int, new_password: str):
+    """更新用户密码 - 使用 py-opengauss 的 execute 方法"""
+    user = get_user(db, user_id)
     if user:
-        user.hashed_password = get_password_hash(new_password)
-        user.updated_at = datetime.utcnow()
-        if commit:
-            db.commit()
-            db.refresh(user)
-        return user
+        hashed_password = get_password_hash(new_password)
+        now = datetime.utcnow()
+        # 使用 py-opengauss 的 execute 方法更新
+        db.execute(f"UPDATE users SET hashed_password = '{hashed_password}', updated_at = {_format_datetime(now)} WHERE id = {user_id}")
+        return get_user(db, user_id)
     return None
 
-def update_user_profile(db: Session, user_id: int, profile_update, commit: bool = False):
-    """更新用户个人资料"""
-    db_user = db.query(User).filter(User.id == user_id).first()
-    if db_user:
+def update_user_profile(db, user_id: int, profile_update):
+    """更新用户个人资料 - 使用 py-opengauss 的 execute 方法"""
+    user = get_user(db, user_id)
+    if not user:
+        return None
+    
+    # 构建更新语句
+    update_fields = []
+    
+    # 获取更新数据
+    update_data = {}
+    if hasattr(profile_update, 'model_dump'):
         update_data = profile_update.model_dump(exclude_unset=True)
-        for field, value in update_data.items():
-            setattr(db_user, field, value)
-        db_user.updated_at = datetime.utcnow()
-        if commit:
-            db.commit()
-            db.refresh(db_user)
-        return db_user
-    return None
+    elif hasattr(profile_update, '__dict__'):
+        update_data = profile_update.__dict__
+    
+    # 构建更新字段
+    for field, value in update_data.items():
+        if field not in ['id', 'username', 'email', 'created_at', 'updated_at', 'hashed_password']:  # 不更新这些字段
+            if field in ['full_name', 'bio', 'address', 'avatar_url', 'phone_secondary']:
+                # 字符串字段
+                value_safe = _escape(value)
+                update_fields.append(f"{field} = {value_safe}")
+            else:
+                # 其他字段
+                value_safe = _escape(str(value))
+                update_fields.append(f"{field} = {value_safe}")
+    
+    # 添加更新时间
+    update_fields.append(f"updated_at = {_format_datetime(datetime.utcnow())}")
+    
+    if update_fields:
+        # 使用 py-opengauss 的 execute 方法更新
+        sql = f"UPDATE users SET {', '.join(update_fields)} WHERE id = {user_id}"
+        db.execute(sql)
+    
+    # 返回更新后的用户数据
+    return get_user(db, user_id)
 
-def get_user_profile(db: Session, user_id: int):
+def get_user_profile(db, user_id: int):
     """获取用户完整个人资料"""
-    return db.query(User).filter(User.id == user_id).first()
+    return get_user(db, user_id)
 
-def generate_verification_code(db: Session, user_id: int, code_type: str, commit: bool = False) -> str:
+def generate_verification_code(db, user_id: int, code_type: str):
     """
-    生成验证码（6位数字）
+    生成验证码（6位数字）- 使用 py-opengauss 的 execute 方法
     
     Args:
-        db: 数据库会话
+        db: 数据库连接
         user_id: 用户ID
         code_type: 验证码类型（"email" 或 "phone"）
-        commit: 是否立即提交事务（默认False）
         
     Returns:
         验证码字符串
     """
-    import random
-    from datetime import timedelta
-    
     # 生成6位数字验证码
     code = str(random.randint(100000, 999999))
+    expires = datetime.utcnow() + timedelta(minutes=10)  # 10分钟有效
     
-    user = db.query(User).filter(User.id == user_id).first()
-    if user:
-        user.verification_code = code
-        user.verification_code_expires = datetime.utcnow() + timedelta(minutes=10)  # 10分钟有效
-        if commit:
-            db.commit()
+    # 使用 py-opengauss 的 execute 方法更新
+    db.execute(f"UPDATE users SET verification_code = '{code}', verification_code_expires = {_format_datetime(expires)} WHERE id = {user_id}")
     
     return code
 
-def verify_verification_code(db: Session, user_id: int, code: str) -> bool:
+def verify_verification_code(db, user_id: int, code: str) -> bool:
     """
-    验证验证码
+    验证验证码 - 使用 py-opengauss 的 query 方法
     
     Args:
-        db: 数据库会话
+        db: 数据库连接
         user_id: 用户ID
         code: 验证码
         
     Returns:
         验证是否成功
     """
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
+    # 使用 py-opengauss 的 query 方法查询
+    rows = db.query(f"SELECT verification_code, verification_code_expires FROM users WHERE id = {user_id} LIMIT 1")
+    
+    if not rows:
         return False
     
+    result = rows[0]
+    db_code, expires = result
+    
     # 检查验证码是否匹配
-    if user.verification_code != code:
+    if db_code != code:
         return False
     
     # 检查验证码是否过期
-    if user.verification_code_expires and user.verification_code_expires < datetime.utcnow():
+    if expires and expires < datetime.utcnow():
         return False
     
     return True

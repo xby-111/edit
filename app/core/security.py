@@ -4,11 +4,9 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 from app.core.config import settings
 from fastapi import HTTPException, status, Depends
-from sqlalchemy.orm import Session
-from models import User
 from app.db.session import get_db
 from fastapi.security import OAuth2PasswordBearer
-from schemas import User as UserSchema
+from app.schemas import User as UserSchema
 
 # OAuth2 scheme for token authentication
 oauth2_scheme = OAuth2PasswordBearer(
@@ -22,12 +20,18 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     """
     Verify a plain password against its hashed version.
     """
+    # bcrypt has a 72 byte limit for passwords
+    if len(plain_password) > 72:
+        plain_password = plain_password[:72]
     return pwd_context.verify(plain_password, hashed_password)
 
 def get_password_hash(password: str) -> str:
     """
     Generate a hash for the given password.
     """
+    # bcrypt has a 72 byte limit for passwords
+    if len(password) > 72:
+        password = password[:72]
     return pwd_context.hash(password)
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
@@ -54,7 +58,7 @@ def decode_access_token(token: str) -> Optional[dict]:
     except JWTError:
         return None
 
-async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> UserSchema:
+async def get_current_user(token: str = Depends(oauth2_scheme), db = Depends(get_db)) -> UserSchema:
     """
     Get the current authenticated user from the JWT token.
     Returns a UserSchema object.
@@ -72,21 +76,28 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
     except JWTError:
         raise credentials_exception
     
-    user = db.query(User).filter(User.username == username).first()
-    if user is None:
+    # Query user from database - 使用 py-opengauss 的 query 方法
+    from app.services.user_service import _escape
+    
+    username_safe = _escape(username)
+    rows = db.query(f"SELECT id, username, email, phone, is_active, role, full_name, bio, avatar_url, created_at, updated_at FROM users WHERE username = {username_safe} LIMIT 1")
+    
+    if not rows:
         raise credentials_exception
     
-    # Convert User model to UserSchema
+    result = rows[0]  # 取第一行
+    
+    # Convert result to UserSchema
     return UserSchema(
-        id=user.id,
-        username=user.username,
-        email=user.email,
-        phone=getattr(user, 'phone', None),
-        is_active=user.is_active,
-        role=user.role,
-        full_name=getattr(user, 'full_name', None),
-        bio=getattr(user, 'bio', None),
-        avatar_url=getattr(user, 'avatar_url', None),
-        created_at=user.created_at,
-        updated_at=getattr(user, 'updated_at', None)
+        id=result[0],
+        username=result[1],
+        email=result[2],
+        phone=result[3],
+        is_active=result[4],
+        role=result[5],
+        full_name=result[6],
+        bio=result[7],
+        avatar_url=result[8],
+        created_at=result[9],
+        updated_at=result[10]
     )

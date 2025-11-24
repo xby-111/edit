@@ -1,6 +1,5 @@
 fastapi==0.121.2
 uvicorn==0.38.0
-SQLAlchemy==2.0.44
 py-opengauss==1.1.0
 python-dotenv==1.2.1
 python-jose[cryptography]==3.5.0

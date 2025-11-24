@@ -14,6 +14,7 @@ from app.api.routers import auth, users, documents, ws
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
+    description="多人协作文档编辑后端 API，支持用户注册、登录、文档管理与协同编辑。",
     version=settings.VERSION,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -35,10 +36,10 @@ app.add_middleware(
 )
 
 # Include API routers
-app.include_router(auth.router, prefix=f"{settings.API_V1_STR}/auth", tags=["auth"])
-app.include_router(users.router, prefix=settings.API_V1_STR, tags=["users"])
-app.include_router(documents.router, prefix=settings.API_V1_STR, tags=["documents"])
-app.include_router(ws.router, prefix=settings.API_V1_STR, tags=["websocket"])
+app.include_router(auth.router, prefix=f"{settings.API_V1_STR}/auth", tags=["认证与登录"])
+app.include_router(users.router, prefix=settings.API_V1_STR, tags=["用户管理"])
+app.include_router(documents.router, prefix=settings.API_V1_STR, tags=["文档管理"])
+app.include_router(ws.router, prefix=settings.API_V1_STR, tags=["实时通信"])
 
 # Mount static files and templates
 templates = Jinja2Templates(directory="templates")

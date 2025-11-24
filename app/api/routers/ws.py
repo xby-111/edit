@@ -1,9 +1,7 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.services.websocket_service import ConnectionManager
-from sqlalchemy.orm import Session
 from app.db.session import get_db
-from models import Document
-from sqlalchemy import func
+from datetime import datetime
 
 """
 WebSocket 协作编辑器协议文档
@@ -48,12 +46,13 @@ async def websocket_document_endpoint(websocket: WebSocket, document_id: int):
     import time
     user_id = int(time.time() * 1000000) % 1000000  # 使用时间戳的微秒部分生成唯一ID
 
-    # 获取数据库会话以获取文档内容
-    db: Session = next(get_db())
+    # 获取数据库连接以获取文档内容
+    db = next(get_db())
     try:
-        # 获取文档内容用于初始化新连接的用户
-        document = db.query(Document).filter(Document.id == document_id).first()
-        initial_content = document.content if document else ""
+        # 获取文档内容用于初始化新连接的用户 - 使用 py-opengauss 的 query 方法
+        rows = db.query(f"SELECT content FROM documents WHERE id = {document_id} LIMIT 1")
+        
+        initial_content = rows[0][0] if rows else ""
         
         await manager.connect(websocket, document_id, user_id, initial_content)
         
@@ -64,46 +63,22 @@ async def websocket_document_endpoint(websocket: WebSocket, document_id: int):
 
                 # 处理内容更新消息
                 if data["type"] == "content":
-                    # 更新数据库中的文档内容
-                    document = db.query(Document).filter(Document.id == document_id).first()
-                    if document:
-                        document.content = data["content"]
-                        document.updated_at = func.now()  # 更新时间
-                        db.commit()
-                        db.refresh(document)
+                    # 更新数据库中的文档内容 - 使用 websocket_service 处理
+                    await manager.handle_message(document_id, user_id, data, websocket, db)
                     
-                    # 广播内容更新给房间内的其他用户
-                    broadcast_data = {
-                        "type": "content",
-                        "content": data["content"]
-                    }
-                    print("WS broadcast:", broadcast_data, "to room", document_id)
-                    await manager.broadcast_to_room(
-                        document_id,
-                        broadcast_data,
-                        user_id,
-                        websocket
-                    )
+                    
             
                 elif data["type"] == "cursor":
-                    # 广播光标位置更新给房间内的其他用户，包含用户ID
-                    broadcast_data = {
-                        "type": "cursor",
-                        "cursor": data["cursor"],
-                        "user_id": user_id  # 添加用户ID信息
-                    }
-                    print("WS broadcast:", broadcast_data, "to room", document_id)
-                    await manager.broadcast_to_room(
-                        document_id,
-                        broadcast_data,
-                        user_id,
-                        websocket
-                    )
+                    # 广播光标位置更新给房间内的其他用户，包含用户ID - 使用 websocket_service 处理
+                    await manager.handle_message(document_id, user_id, data, websocket, db)
 
         except WebSocketDisconnect:
             manager.disconnect(websocket, document_id, user_id)
         except Exception as e:
             print(f"WebSocket error: {e}")
             manager.disconnect(websocket, document_id, user_id)
+    except Exception as e:
+        print(f"WebSocket setup error: {e}")
     finally:
-        db.close()
+        # 注意：对于全局连接，可能不需要关闭，但这里仅保持逻辑一致性
+        pass
