@@ -8,9 +8,10 @@ class Settings(BaseSettings):
     
     # Database settings - using PostgreSQL dialect for openGauss
     DATABASE_URL: str = os.getenv(
-        "DATABASE_URL",
-        "postgresql://omm:Guass000@localhost:5432/postgres"
-    )
+    "DATABASE_URL",
+    "postgresql+psycopg2://appuser:YH030500!@120.46.143.126:5432/editdb"
+)
+
     
     # JWT settings
     SECRET_KEY: str = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")

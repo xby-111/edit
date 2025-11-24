@@ -30,8 +30,27 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
         )
     
     # Create new user
-    db_user = create_user(db, user=user)
-    return db_user
+    try:
+        db_user = create_user(db, user=user, commit=False)
+        db.commit()
+        db.refresh(db_user)
+        return UserSchema(
+            id=db_user.id,
+            username=db_user.username,
+            email=db_user.email,
+            phone=getattr(db_user, 'phone', None),
+            is_active=db_user.is_active,
+            role=db_user.role,
+            created_at=db_user.created_at,
+            updated_at=getattr(db_user, 'updated_at', None)
+        )
+    except Exception as e:
+        db.rollback()
+        logger.error(f"用户注册失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="注册失败，请稍后重试"
+        )
 
 @router.post("/token", response_model=Token)
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):

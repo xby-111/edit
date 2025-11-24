@@ -1,16 +1,29 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator, model_validator
 from datetime import datetime
 from typing import Optional
 
 # User schemas
 class UserBase(BaseModel):
     username: str
-    email: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
     is_active: Optional[bool] = True
     role: Optional[str] = "viewer"
 
-class UserCreate(UserBase):
+class UserCreate(BaseModel):
+    username: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
     password: str
+    is_active: Optional[bool] = True
+    role: Optional[str] = "viewer"
+    
+    @model_validator(mode='after')
+    def validate_email_or_phone(self):
+        """验证邮箱或手机号至少提供一个"""
+        if not self.email and not self.phone:
+            raise ValueError("邮箱或手机号至少需要提供一个")
+        return self
 
 class UserUpdate(BaseModel):
     username: Optional[str] = None

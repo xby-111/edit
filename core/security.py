@@ -8,9 +8,12 @@ from sqlalchemy.orm import Session
 from models import User
 from db.session import get_db
 from fastapi.security import OAuth2PasswordBearer
+from schemas import User as UserSchema
 
 # OAuth2 scheme for token authentication
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+oauth2_scheme = OAuth2PasswordBearer(
+    tokenUrl=f"{settings.API_V1_STR}/auth/token"
+)
 
 # Password hashing context
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -51,7 +54,11 @@ def decode_access_token(token: str) -> Optional[dict]:
     except JWTError:
         return None
 
-async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> UserSchema:
+    """
+    Get the current authenticated user from the JWT token.
+    Returns a UserSchema object.
+    """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -68,4 +75,18 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
     user = db.query(User).filter(User.username == username).first()
     if user is None:
         raise credentials_exception
-    return user
+    
+    # Convert User model to UserSchema
+    return UserSchema(
+        id=user.id,
+        username=user.username,
+        email=user.email,
+        phone=getattr(user, 'phone', None),
+        is_active=user.is_active,
+        role=user.role,
+        full_name=getattr(user, 'full_name', None),
+        bio=getattr(user, 'bio', None),
+        avatar_url=getattr(user, 'avatar_url', None),
+        created_at=user.created_at,
+        updated_at=getattr(user, 'updated_at', None)
+    )
