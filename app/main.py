@@ -8,9 +8,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
 
-from core.config import settings
-from db.init_db import init_db
-from api.routers import auth, users, documents, ws
+from app.core.config import settings
+from app.db.init_db import init_db
+from app.api.routers import auth, users, documents, ws
 
 app = FastAPI(
     title=settings.PROJECT_NAME,

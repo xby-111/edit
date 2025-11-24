@@ -2,11 +2,11 @@ from datetime import datetime, timedelta
 from typing import Optional
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from core.config import settings
+from app.core.config import settings
 from fastapi import HTTPException, status, Depends
 from sqlalchemy.orm import Session
 from models import User
-from db.session import get_db
+from app.db.session import get_db
 from fastapi.security import OAuth2PasswordBearer
 from schemas import User as UserSchema
 

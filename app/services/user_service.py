@@ -5,7 +5,7 @@ import logging
 from sqlalchemy.orm import Session
 from models import User
 from schemas import UserCreate
-from core.security import get_password_hash
+from app.core.security import get_password_hash
 from datetime import datetime
 
 logger = logging.getLogger(__name__)

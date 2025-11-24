@@ -5,10 +5,10 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
-from core.security import get_current_user
-from db.session import get_db
+from app.core.security import get_current_user
+from app.db.session import get_db
 from schemas import User, UserUpdate
-from services.user_service import get_user, update_user, delete_user
+from app.services.user_service import get_user, update_user, delete_user
 from models import OperationLog
 
 logger = logging.getLogger(__name__)

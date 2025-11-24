@@ -1,6 +1,6 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from core.config import settings
+from app.core.config import settings
 
 # Create engine using PostgreSQL dialect for openGauss
 engine = create_engine(

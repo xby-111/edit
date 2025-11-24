@@ -2,7 +2,7 @@
 初始化默认权限和角色权限
 """
 import logging
-from db.session import SessionLocal
+from app.db.session import SessionLocal
 from models import Permission, RolePermission
 
 logger = logging.getLogger(__name__)

@@ -5,10 +5,10 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
-from core.security import get_current_user
-from db.session import get_db
+from app.core.security import get_current_user
+from app.db.session import get_db
 from schemas import Document, DocumentCreate, DocumentUpdate
-from services.document_service import (
+from app.services.document_service import (
     get_documents, get_document, create_document, update_document, 
     delete_document, create_document_version, get_document_versions,
     get_document_version_count

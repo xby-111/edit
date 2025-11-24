@@ -2,7 +2,7 @@
 数据库初始化模块
 """
 import logging
-from db.session import engine
+from app.db.session import engine
 from models import Base
 
 logger = logging.getLogger(__name__)
@@ -18,7 +18,7 @@ def init_db():
         
         # 初始化默认权限（如果权限模块存在）
         try:
-            from db.init_permissions import init_permissions
+            from app.db.init_permissions import init_permissions
             init_permissions()
         except ImportError:
             # 权限初始化模块不存在，跳过

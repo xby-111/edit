@@ -1,7 +1,7 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from services.websocket_service import ConnectionManager
+from app.services.websocket_service import ConnectionManager
 from sqlalchemy.orm import Session
-from db.session import get_db
+from app.db.session import get_db
 from models import Document
 from sqlalchemy import func
 
