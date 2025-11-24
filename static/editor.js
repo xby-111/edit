@@ -119,6 +119,12 @@ function measureTextWidth(text, element) {
 // 初始化
 function init(doc_id, token = "") {
     documentId = doc_id;
+    
+    // 如果没有传入 token，尝试从 localStorage 获取
+    if (!token) {
+        token = localStorage.getItem('access_token') || '';
+    }
+    
     connect(doc_id, token);
     setupEditor();
 }

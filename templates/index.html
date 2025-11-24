@@ -1,50 +1,237 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <title>多人实时协作编辑器</title>
-    <style>
-        #container {
-            position: relative;
-            width: 90%;
-        }
-
-        #editor {
-            width: 100%;
-            height: 400px;
-            font-size: 16px;
-            position: relative;
-            z-index: 1;
-        }
-
-        .cursor {
-            position: absolute;
-            width: 2px;
-            height: 20px;
-            background-color: red;
-            z-index: 2;
-        }
-        
-        .remote-cursor {
-            position: absolute;
-            width: 2px;
-            height: 20px;
-            z-index: 10;
-        }
-    </style>
-</head>
-<body>
-    <h2>多人同时在线编辑文档（含光标同步）</h2>
-
-    <div id="container">
-        <textarea id="editor" style="width: 100%; height: 90vh"></textarea>
-        <div id="cursor-layer"></div>
-    </div>
-
-    <script src="/static/editor.js"></script>
-    <script>
-        // 使用文档ID 1 作为示例，实际应用中应从URL参数或后端获取
-        init(1);
-    </script>
-</body>
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <title>多人协作文档编辑系统</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        
+        .container {
+            background-color: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .auth-section {
+            max-width: 400px;
+            margin: 0 auto;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        
+        input[type="text"], input[type="password"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            width: 100%;
+        }
+        
+        button:hover {
+            background-color: #45a049;
+        }
+        
+        .error-message {
+            color: #f44336;
+            margin-top: 10px;
+            text-align: center;
+        }
+        
+        .success-message {
+            color: #4CAF50;
+            margin-top: 10px;
+            text-align: center;
+        }
+        
+        .documents-section {
+            display: none;
+        }
+        
+        .document-list {
+            margin-top: 20px;
+        }
+        
+        .document-item {
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .document-info h3 {
+            margin: 0 0 5px 0;
+            color: #333;
+        }
+        
+        .document-info p {
+            margin: 0;
+            color: #666;
+            font-size: 14px;
+        }
+        
+        .document-actions {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .btn-small {
+            padding: 5px 10px;
+            font-size: 14px;
+            width: auto;
+        }
+        
+        .btn-primary {
+            background-color: #2196F3;
+        }
+        
+        .btn-primary:hover {
+            background-color: #0b7dda;
+        }
+        
+        .btn-danger {
+            background-color: #f44336;
+        }
+        
+        .btn-danger:hover {
+            background-color: #d32f2f;
+        }
+        
+        .btn-success {
+            background-color: #4CAF50;
+        }
+        
+        .btn-success:hover {
+            background-color: #45a049;
+        }
+        
+        .user-info {
+            text-align: right;
+            margin-bottom: 20px;
+            color: #666;
+        }
+        
+        .logout-btn {
+            background-color: #f44336;
+            margin-left: 10px;
+        }
+        
+        .no-documents {
+            text-align: center;
+            color: #666;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>多人协作文档编辑系统</h1>
+        
+        <!-- 登录表单 -->
+        <div id="login-section" class="auth-section">
+            <h2>用户登录</h2>
+            <form id="login-form">
+                <div class="form-group">
+                    <label for="username">用户名:</label>
+                    <input type="text" id="username" name="username" required>
+                </div>
+                <div class="form-group">
+                    <label for="password">密码:</label>
+                    <input type="password" id="password" name="password" required>
+                </div>
+                <button type="submit">登录</button>
+                <div id="login-error" class="error-message"></div>
+            </form>
+            
+            <div style="margin-top: 20px; text-align: center;">
+                <p>还没有账号？</p>
+                <button type="button" id="show-register" style="background-color: #FF9800;">注册新账号</button>
+            </div>
+        </div>
+        
+        <!-- 注册表单 -->
+        <div id="register-section" class="auth-section" style="display: none;">
+            <h2>用户注册</h2>
+            <form id="register-form">
+                <div class="form-group">
+                    <label for="reg-username">用户名:</label>
+                    <input type="text" id="reg-username" name="username" required>
+                </div>
+                <div class="form-group">
+                    <label for="reg-email">邮箱:</label>
+                    <input type="text" id="reg-email" name="email" required>
+                </div>
+                <div class="form-group">
+                    <label for="reg-password">密码:</label>
+                    <input type="password" id="reg-password" name="password" required>
+                </div>
+                <button type="submit">注册</button>
+                <div id="register-error" class="error-message"></div>
+            </form>
+            
+            <div style="margin-top: 20px; text-align: center;">
+                <p>已有账号？</p>
+                <button type="button" id="show-login" style="background-color: #2196F3;">返回登录</button>
+            </div>
+        </div>
+        
+        <!-- 文档列表 -->
+        <div id="documents-section" class="documents-section">
+            <div class="user-info">
+                欢迎，<span id="current-username"></span>
+                <button id="logout-btn" class="logout-btn btn-small">退出登录</button>
+            </div>
+            
+            <h2>我的文档</h2>
+            <button id="create-document-btn" class="btn-success">新建文档</button>
+            
+            <div id="document-list" class="document-list">
+                <!-- 文档列表将通过 JavaScript 动态加载 -->
+            </div>
+            
+            <div id="no-documents" class="no-documents" style="display: none;">
+                暂无文档，点击上方按钮创建新文档
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/client.js"></script>
+</body>
 </html>
