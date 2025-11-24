@@ -21,20 +21,23 @@ router = APIRouter(tags=["文档管理"])
 
 @router.get("/documents", response_model=List[Document], summary="获取文档列表", description="获取当前用户有权限访问的所有文档")
 async def get_documents_endpoint(
-    current_user = Depends(get_current_user), 
+    current_user = Depends(get_current_user),
     db = Depends(get_db),
     skip: int = 0,
     limit: int = 100,
-    folder: str = None
+    folder: str = None,
+    status: str = None,
+    tag: str = None
 ):
     """获取当前用户的文档列表"""
-    documents = get_documents(db, current_user.id, skip=skip, limit=limit, folder=folder)
+    documents = get_documents(db, current_user.id, skip=skip, limit=limit, folder=folder, status=status, tag=tag)
     return documents
 
 @router.get("/documents/search", response_model=List[Document], summary="搜索文档", description="根据关键词、标签、日期等条件搜索文档")
 async def search_documents_endpoint(
     keyword: str = None,
     tags: str = None,
+    status: str = None,
     folder: str = None,
     sort_by: str = "updated_at",
     order: str = "desc",
@@ -49,8 +52,20 @@ async def search_documents_endpoint(
 ):
     """搜索文档"""
     documents = search_documents(
-        db, current_user.id, keyword, tags, folder, sort_by, order,
-        created_from, created_to, updated_from, updated_to, skip, limit
+        db=db,
+        owner_id=current_user.id,
+        keyword=keyword,
+        tags=tags,
+        folder=folder,
+        sort_by=sort_by,
+        order=order,
+        created_from=created_from,
+        created_to=created_to,
+        updated_from=updated_from,
+        updated_to=updated_to,
+        skip=skip,
+        limit=limit,
+        status=status,
     )
     return documents
 
@@ -75,7 +90,7 @@ async def get_tags_endpoint(
 @router.post("/documents/{document_id}/lock", summary="锁定文档", description="锁定文档，禁止其他用户编辑")
 async def lock_document_endpoint(
     document_id: int,
-    current_user = Depends(get_current_user), 
+    current_user = Depends(get_current_user),
     db = Depends(get_db)
 ):
     """锁定文档"""
@@ -84,11 +99,13 @@ async def lock_document_endpoint(
     if not document:
         raise HTTPException(status_code=404, detail="文档不存在")
     
-    if document.get('is_locked'):
-        raise HTTPException(status_code=400, detail="文档已被锁定")
+    if document.get('is_locked') and document.get('locked_by') != current_user.id:
+        raise HTTPException(status_code=409, detail="文档已被其他用户锁定")
     
     try:
-        lock_document(db, document_id, current_user.id)
+        locked = lock_document(db, document_id, current_user.id)
+        if not locked:
+            raise HTTPException(status_code=409, detail="文档已被其他用户锁定")
         return {"message": "文档已锁定"}
     except Exception as e:
         logger.error(f"锁定文档失败: {e}", exc_info=True)
@@ -113,7 +130,9 @@ async def unlock_document_endpoint(
         raise HTTPException(status_code=403, detail="只有锁定者才能解锁文档")
     
     try:
-        unlock_document(db, document_id, current_user.id)
+        unlocked = unlock_document(db, document_id, current_user.id)
+        if not unlocked:
+            raise HTTPException(status_code=409, detail="文档解锁失败，请重试")
         return {"message": "文档已解锁"}
     except Exception as e:
         logger.error(f"解锁文档失败: {e}", exc_info=True)

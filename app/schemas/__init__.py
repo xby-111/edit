@@ -1,6 +1,6 @@
 from pydantic import BaseModel, field_validator, model_validator
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Literal
 from pydantic import EmailStr
 
 # User schemas
@@ -9,7 +9,7 @@ class UserBase(BaseModel):
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
     is_active: Optional[bool] = True
-    role: Optional[str] = "viewer"
+    role: Literal['admin', 'editor', 'viewer'] | None = "viewer"
 
 class UserCreate(UserBase):
     password: str
@@ -26,7 +26,7 @@ class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
     is_active: Optional[bool] = None
-    role: Optional[str] = None
+    role: Literal['admin', 'editor', 'viewer'] | None = None
     full_name: Optional[str] = None
     bio: Optional[str] = None
     address: Optional[str] = None
@@ -55,7 +55,7 @@ class TokenData(BaseModel):
 class DocumentBase(BaseModel):
     title: str
     content: Optional[str] = ""
-    status: Optional[str] = "active"
+    status: Literal['active', 'archived', 'draft', 'deleted'] | None = "active"
     folder_name: Optional[str] = None
     tags: Optional[str] = None
 
