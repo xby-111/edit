@@ -2,13 +2,16 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from app.core.config import settings
 
-# Create engine using PostgreSQL dialect for openGauss
+# Create engine using openGauss dialect
+DATABASE_URL = settings.DATABASE_URL.replace(
+    "postgresql+psycopg2",
+    "opengauss+pyopeng"
+)
+
 engine = create_engine(
-    settings.DATABASE_URL,
-    echo=True,  # Set to False in production
-    pool_pre_ping=True,  # Ensures connections are valid
-    pool_size=10,
-    max_overflow=20
+    DATABASE_URL,
+    echo=True,
+    pool_pre_ping=True
 )
 
 # Create session factory
