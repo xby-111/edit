@@ -56,6 +56,8 @@ class DocumentBase(BaseModel):
     title: str
     content: Optional[str] = ""
     status: Optional[str] = "active"
+    folder_name: Optional[str] = None
+    tags: Optional[str] = None
 
 class DocumentCreate(DocumentBase):
     pass
@@ -64,10 +66,14 @@ class DocumentUpdate(BaseModel):
     title: Optional[str] = None
     content: Optional[str] = None
     status: Optional[str] = None
+    folder_name: Optional[str] = None
+    tags: Optional[str] = None
 
 class Document(DocumentBase):
     id: int
     owner_id: Optional[int] = None
+    is_locked: Optional[bool] = False
+    locked_by: Optional[int] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -91,6 +97,32 @@ class DocumentVersionUpdate(BaseModel):
 class DocumentVersion(DocumentVersionBase):
     id: int
     created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+# Template schemas
+class TemplateBase(BaseModel):
+    name: str
+    description: Optional[str] = None
+    content: str
+    category: Optional[str] = "general"
+    is_active: Optional[bool] = True
+
+class TemplateCreate(TemplateBase):
+    pass
+
+class TemplateUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    content: Optional[str] = None
+    category: Optional[str] = None
+    is_active: Optional[bool] = None
+
+class Template(TemplateBase):
+    id: int
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

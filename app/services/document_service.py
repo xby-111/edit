@@ -2,7 +2,7 @@
 文档服务层 - 使用 py-opengauss 直接 SQL 操作
 """
 import logging
-from app.schemas import DocumentCreate, DocumentUpdate
+from app.schemas import DocumentCreate, DocumentUpdate, TemplateCreate, TemplateUpdate
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -20,10 +20,18 @@ def _format_datetime(dt: datetime | None) -> str:
         return "NULL"
     return f"'{dt.strftime('%Y-%m-%d %H:%M:%S')}'"
 
-def get_documents(db, owner_id: int, skip: int = 0, limit: int = 100):
+def get_documents(db, owner_id: int, skip: int = 0, limit: int = 100, folder: str = None):
     """获取文档列表 - 使用 py-opengauss 的 query 方法"""
+    where_conditions = [f"owner_id = {owner_id}"]
+    
+    if folder:
+        folder_safe = _escape(folder)
+        where_conditions.append(f"folder_name = {folder_safe}")
+    
+    where_clause = " WHERE " + " AND ".join(where_conditions)
+    
     # 使用 py-opengauss 的 query 方法查询
-    rows = db.query(f"SELECT id, owner_id, title, content, status, created_at, updated_at FROM documents WHERE owner_id = {owner_id} ORDER BY id LIMIT {limit} OFFSET {skip}")
+    rows = db.query(f"SELECT id, owner_id, title, content, status, folder_name, tags, is_locked, locked_by, created_at, updated_at FROM documents{where_clause} ORDER BY updated_at DESC LIMIT {limit} OFFSET {skip}")
     
     documents = []
     for result in rows:
@@ -33,15 +41,19 @@ def get_documents(db, owner_id: int, skip: int = 0, limit: int = 100):
             'title': result[2],
             'content': result[3],
             'status': result[4],
-            'created_at': result[5],
-            'updated_at': result[6]
+            'folder_name': result[5],
+            'tags': result[6],
+            'is_locked': result[7],
+            'locked_by': result[8],
+            'created_at': result[9],
+            'updated_at': result[10]
         })
     return documents
 
 def get_document(db, document_id: int, owner_id: int):
     """获取文档 - 使用 py-opengauss 的 query 方法"""
     # 使用 py-opengauss 的 query 方法查询
-    rows = db.query(f"SELECT id, owner_id, title, content, status, created_at, updated_at FROM documents WHERE id = {document_id} AND owner_id = {owner_id} LIMIT 1")
+    rows = db.query(f"SELECT id, owner_id, title, content, status, folder_name, tags, is_locked, locked_by, created_at, updated_at FROM documents WHERE id = {document_id} AND owner_id = {owner_id} LIMIT 1")
     
     if rows:
         result = rows[0]
@@ -51,8 +63,12 @@ def get_document(db, document_id: int, owner_id: int):
             'title': result[2],
             'content': result[3],
             'status': result[4],
-            'created_at': result[5],
-            'updated_at': result[6]
+            'folder_name': result[5],
+            'tags': result[6],
+            'is_locked': result[7],
+            'locked_by': result[8],
+            'created_at': result[9],
+            'updated_at': result[10]
         }
     return None
 
@@ -241,3 +257,279 @@ def get_document_versions(db, document_id: int):
             'created_at': result[6]
         })
     return versions
+
+# 模板相关服务函数
+def get_templates(db, category: str = None, active_only: bool = True):
+    """获取模板列表 - 使用 py-opengauss 的 query 方法"""
+    where_conditions = []
+    if category:
+        category_safe = _escape(category)
+        where_conditions.append(f"category = {category_safe}")
+    
+    if active_only:
+        where_conditions.append("is_active = TRUE")
+    
+    where_clause = " WHERE " + " AND ".join(where_conditions) if where_conditions else ""
+    
+    # 使用 py-opengauss 的 query 方法查询
+    rows = db.query(f"SELECT id, name, description, content, category, is_active, created_at, updated_at FROM document_templates{where_clause} ORDER BY category, name")
+    
+    templates = []
+    for result in rows:
+        templates.append({
+            'id': result[0],
+            'name': result[1],
+            'description': result[2],
+            'content': result[3],
+            'category': result[4],
+            'is_active': result[5],
+            'created_at': result[6],
+            'updated_at': result[7]
+        })
+    return templates
+
+def get_template(db, template_id: int):
+    """获取单个模板 - 使用 py-opengauss 的 query 方法"""
+    # 使用 py-opengauss 的 query 方法查询
+    rows = db.query(f"SELECT id, name, description, content, category, is_active, created_at, updated_at FROM document_templates WHERE id = {template_id} AND is_active = TRUE LIMIT 1")
+    
+    if rows:
+        result = rows[0]
+        return {
+            'id': result[0],
+            'name': result[1],
+            'description': result[2],
+            'content': result[3],
+            'category': result[4],
+            'is_active': result[5],
+            'created_at': result[6],
+            'updated_at': result[7]
+        }
+    return None
+
+def create_template(db, template: TemplateCreate):
+    """
+    创建模板 - 使用 py-opengauss 的 execute 方法
+    
+    Args:
+        db: 数据库连接
+        template: 模板创建数据
+        
+    Returns:
+        创建的模板对象
+    """
+    now = datetime.utcnow()
+    
+    # 构造安全的 SQL 字符串
+    name_safe = _escape(template.name)
+    desc_safe = _escape(template.description)
+    content_safe = _escape(template.content)
+    category_safe = _escape(template.category)
+    is_active_sql = _format_bool(template.is_active)
+    now_sql = _format_datetime(now)
+    
+    # 使用 py-opengauss 的 execute 方法插入模板数据
+    db.execute(f"INSERT INTO document_templates (name, description, content, category, is_active, created_at, updated_at) VALUES ({name_safe}, {desc_safe}, {content_safe}, {category_safe}, {is_active_sql}, {now_sql}, {now_sql})")
+    
+    # 获取刚插入的模板数据
+    rows = db.query(f"SELECT id, name, description, content, category, is_active, created_at, updated_at FROM document_templates ORDER BY id DESC LIMIT 1")
+    
+    if rows:
+        result = rows[0]
+        return {
+            'id': result[0],
+            'name': result[1],
+            'description': result[2],
+            'content': result[3],
+            'category': result[4],
+            'is_active': result[5],
+            'created_at': result[6],
+            'updated_at': result[7]
+        }
+    return None
+
+def update_template(db, template_id: int, template_update: TemplateUpdate):
+    """
+    更新模板 - 使用 py-opengauss 的 execute 方法
+    
+    Args:
+        db: 数据库连接
+        template_id: 模板ID
+        template_update: 更新数据
+        
+    Returns:
+        更新后的模板对象，如果模板不存在返回None
+    """
+    # 检查模板是否存在
+    template = get_template(db, template_id)
+    if not template:
+        return None
+    
+    # 构建更新语句
+    update_fields = []
+    
+    # 获取更新数据
+    update_data = {}
+    if hasattr(template_update, 'model_dump'):
+        update_data = template_update.model_dump(exclude_unset=True)
+    elif hasattr(template_update, '__dict__'):
+        update_data = template_update.__dict__
+    
+    # 构建更新字段
+    for field, value in update_data.items():
+        if field not in ['id', 'created_at']:  # 不更新这些字段
+            if field in ['name', 'description', 'content', 'category']:
+                # 字符串字段
+                value_safe = _escape(value)
+                update_fields.append(f"{field} = {value_safe}")
+            else:
+                # 其他字段
+                value_safe = _escape(str(value))
+                update_fields.append(f"{field} = {value_safe}")
+    
+    # 添加更新时间
+    update_fields.append(f"updated_at = {_format_datetime(datetime.utcnow())}")
+    
+    if update_fields:
+        # 使用 py-opengauss 的 execute 方法更新
+        sql = f"UPDATE document_templates SET {', '.join(update_fields)} WHERE id = {template_id}"
+        db.execute(sql)
+    
+    # 返回更新后的模板数据
+    return get_template(db, template_id)
+
+def delete_template(db, template_id: int):
+    """
+    删除模板（软删除，设置 is_active = FALSE） - 使用 py-opengauss 的 execute 方法
+    
+    Args:
+        db: 数据库连接
+        template_id: 模板ID
+        
+    Returns:
+        是否删除成功
+    """
+    # 检查模板是否存在
+    template = get_template(db, template_id)
+    if not template:
+        return False
+    
+    # 使用 py-opengauss 的 execute 方法软删除模板
+    db.execute(f"UPDATE document_templates SET is_active = FALSE, updated_at = {_format_datetime(datetime.utcnow())} WHERE id = {template_id}")
+    return True
+
+# 搜索和分类相关服务函数
+def search_documents(db, owner_id: int, keyword: str = None, tags: str = None, 
+                   folder: str = None, sort_by: str = "updated_at", order: str = "desc",
+                   created_from: str = None, created_to: str = None, 
+                   updated_from: str = None, updated_to: str = None,
+                   skip: int = 0, limit: int = 100):
+    """搜索文档 - 使用 py-opengauss 的 query 方法"""
+    where_conditions = [f"owner_id = {owner_id}"]
+    
+    # 关键词搜索
+    if keyword:
+        keyword_safe = _escape(f"%{keyword}%")
+        where_conditions.append(f"(title ILIKE {keyword_safe} OR content ILIKE {keyword_safe})")
+    
+    # 标签搜索
+    if tags:
+        tags_safe = _escape(f"%{tags}%")
+        where_conditions.append(f"tags ILIKE {tags_safe}")
+    
+    # 文件夹搜索
+    if folder:
+        folder_safe = _escape(folder)
+        where_conditions.append(f"folder_name = {folder_safe}")
+    
+    # 日期范围搜索
+    if created_from:
+        from_safe = _format_datetime(created_from)
+        where_conditions.append(f"created_at >= {from_safe}")
+    
+    if created_to:
+        to_safe = _format_datetime(created_to)
+        where_conditions.append(f"created_at <= {to_safe}")
+    
+    if updated_from:
+        from_safe = _format_datetime(updated_from)
+        where_conditions.append(f"updated_at >= {from_safe}")
+    
+    if updated_to:
+        to_safe = _format_datetime(updated_to)
+        where_conditions.append(f"updated_at <= {to_safe}")
+    
+    where_clause = " WHERE " + " AND ".join(where_conditions)
+    
+    # 排序
+    valid_sort_fields = ["title", "created_at", "updated_at"]
+    sort_field = sort_by if sort_by in valid_sort_fields else "updated_at"
+    order_dir = "ASC" if order.lower() == "asc" else "DESC"
+    
+    # 使用 py-opengauss 的 query 方法查询
+    rows = db.query(f"""
+        SELECT id, owner_id, title, content, status, folder_name, tags, 
+               is_locked, locked_by, created_at, updated_at
+        FROM documents{where_clause} 
+        ORDER BY {sort_field} {order_dir} 
+        LIMIT {limit} OFFSET {skip}
+    """)
+    
+    documents = []
+    for result in rows:
+        documents.append({
+            'id': result[0],
+            'owner_id': result[1],
+            'title': result[2],
+            'content': result[3],
+            'status': result[4],
+            'folder_name': result[5],
+            'tags': result[6],
+            'is_locked': result[7],
+            'locked_by': result[8],
+            'created_at': result[9],
+            'updated_at': result[10]
+        })
+    return documents
+
+def get_folders(db, owner_id: int):
+    """获取用户的所有文件夹 - 使用 py-opengauss 的 query 方法"""
+    rows = db.query(f"""
+        SELECT DISTINCT folder_name 
+        FROM documents 
+        WHERE owner_id = {owner_id} AND folder_name IS NOT NULL 
+        ORDER BY folder_name
+    """)
+    
+    folders = [row[0] for row in rows if row[0]]
+    return folders
+
+def get_tags(db, owner_id: int):
+    """获取用户的所有标签 - 使用 py-opengauss 的 query 方法"""
+    rows = db.query(f"""
+        SELECT DISTINCT tags 
+        FROM documents 
+        WHERE owner_id = {owner_id} AND tags IS NOT NULL AND tags != ''
+        ORDER BY tags
+    """)
+    
+    # 合并所有标签并去重
+    all_tags = set()
+    for row in rows:
+        if row[0]:
+            tags = row[0].split(',')
+            all_tags.update(tag.strip() for tag in tags if tag.strip())
+    
+    return sorted(list(all_tags))
+
+def lock_document(db, document_id: int, user_id: int):
+    """锁定文档 - 使用 py-opengauss 的 execute 方法"""
+    now_sql = _format_datetime(datetime.utcnow())
+    db.execute(f"UPDATE documents SET is_locked = TRUE, locked_by = {user_id}, updated_at = {now_sql} WHERE id = {document_id}")
+    return True
+
+def unlock_document(db, document_id: int, user_id: int):
+    """解锁文档 - 使用 py-opengauss 的 execute 方法"""
+    now_sql = _format_datetime(datetime.utcnow())
+    db.execute(f"UPDATE documents SET is_locked = FALSE, locked_by = NULL, updated_at = {now_sql} WHERE id = {document_id} AND locked_by = {user_id}")
+    return True

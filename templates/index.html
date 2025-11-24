@@ -142,6 +142,14 @@
             background-color: #45a049;
         }
         
+        .btn-info {
+            background-color: #17a2b8;
+        }
+        
+        .btn-info:hover {
+            background-color: #138496;
+        }
+        
         .user-info {
             text-align: right;
             margin-bottom: 20px;
@@ -157,6 +165,124 @@
             text-align: center;
             color: #666;
             margin-top: 20px;
+        }
+        
+        .search-section {
+            background-color: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        
+        .search-form {
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr 1fr auto;
+            gap: 10px;
+            align-items: end;
+        }
+        
+        .search-form input, .search-form select {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        
+        .tag {
+            display: inline-block;
+            background-color: #e3f2fd;
+            color: #1976d2;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            margin: 2px;
+        }
+        
+        .clickable-tag {
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        
+        .clickable-tag:hover {
+            background-color: #bbdefb;
+        }
+        
+        .btn-warning {
+            background-color: #ff9800;
+        }
+        
+        .btn-warning:hover {
+            background-color: #e68900;
+        }
+        
+        .folder-section {
+            margin-bottom: 20px;
+        }
+        
+        .folder-tabs {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 15px;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        .folder-tab {
+            padding: 8px 16px;
+            border: none;
+            background: none;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+        }
+        
+        .folder-tab.active {
+            border-bottom-color: #2196F3;
+            color: #2196F3;
+            font-weight: bold;
+        }
+        
+        .folder-tab:hover {
+            color: #2196F3;
+        }
+        
+        .tags-container {
+            margin-top: 15px;
+        }
+        
+        .advanced-search {
+            margin-top: 15px;
+            padding: 15px;
+            background-color: white;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            display: none;
+        }
+        
+        .advanced-search-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 10px;
+        }
+        
+        .form-group {
+            margin-bottom: 10px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            box-sizing: border-box;
         }
     </style>
 </head>
@@ -220,7 +346,71 @@
             </div>
             
             <h2>我的文档</h2>
-            <button id="create-document-btn" class="btn-success">新建文档</button>
+            
+            <!-- 搜索区域 -->
+            <div class="search-section">
+                <h3 style="margin-top: 0;">搜索文档</h3>
+                <div class="search-form">
+                    <input type="text" id="search-keyword" placeholder="搜索关键词...">
+                    <select id="search-folder">
+                        <option value="">所有文件夹</option>
+                    </select>
+                    <select id="search-sort">
+                        <option value="updated_at">更新时间</option>
+                        <option value="created_at">创建时间</option>
+                        <option value="title">标题</option>
+                    </select>
+                    <select id="search-order">
+                        <option value="desc">降序</option>
+                        <option value="asc">升序</option>
+                    </select>
+                    <button onclick="searchDocuments()" class="btn-small btn-primary">搜索</button>
+                </div>
+                
+                <div style="margin-top: 10px;">
+                    <input type="text" id="search-tags" placeholder="标签（用逗号分隔）..." style="width: 300px; margin-right: 10px;">
+                    <button onclick="toggleAdvancedSearch()" class="btn-small">高级搜索</button>
+                </div>
+                
+                <div id="advanced-search" class="advanced-search">
+                    <h4>高级搜索选项</h4>
+                    <div class="advanced-search-grid">
+                        <div class="form-group">
+                            <label>创建时间从:</label>
+                            <input type="date" id="created-from">
+                        </div>
+                        <div class="form-group">
+                            <label>创建时间到:</label>
+                            <input type="date" id="created-to">
+                        </div>
+                        <div class="form-group">
+                            <label>更新时间从:</label>
+                            <input type="date" id="updated-from">
+                        </div>
+                        <div class="form-group">
+                            <label>更新时间到:</label>
+                            <input type="date" id="updated-to">
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="tags-container" class="tags-container">
+                    <!-- 标签列表将通过 JavaScript 动态加载 -->
+                </div>
+            </div>
+            
+            <!-- 文件夹分类 -->
+            <div class="folder-section">
+                <h3>文件夹分类</h3>
+                <div id="folder-tabs" class="folder-tabs">
+                    <!-- 文件夹标签将通过 JavaScript 动态加载 -->
+                </div>
+            </div>
+            
+            <div style="margin-bottom: 15px;">
+    <button id="create-document-btn" class="btn-success">从模板新建文档</button>
+    <button id="import-document-btn" class="btn-primary" style="margin-left: 10px;">导入文档</button>
+</div>
             
             <div id="document-list" class="document-list">
                 <!-- 文档列表将通过 JavaScript 动态加载 -->
