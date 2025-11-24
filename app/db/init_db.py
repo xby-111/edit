@@ -26,8 +26,8 @@ def init_db():
                 email VARCHAR(100) UNIQUE,
                 phone VARCHAR(20) UNIQUE,
                 hashed_password VARCHAR(255) NOT NULL,
-                is_active BOOLEAN DEFAULT TRUE,
-                role VARCHAR(20) DEFAULT 'viewer',
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                role VARCHAR(20) NOT NULL DEFAULT 'viewer',
                 avatar_url VARCHAR(500),
                 full_name VARCHAR(100),
                 bio TEXT,
@@ -38,53 +38,102 @@ def init_db():
                 verification_code VARCHAR(10),
                 verification_code_expires TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT ck_users_role CHECK (role IN ('admin','editor','viewer')),
+                CONSTRAINT ck_users_is_active CHECK (is_active IN (TRUE, FALSE))
             )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_users_status_role ON users (is_active, role)
         """)
 
         # Documents table
         conn.execute("""
             CREATE TABLE IF NOT EXISTS documents (
                 id SERIAL PRIMARY KEY,
-                owner_id INTEGER REFERENCES users(id),
+                owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE,
                 title VARCHAR(200) NOT NULL,
                 content TEXT DEFAULT '',
-                status VARCHAR(50) DEFAULT 'active',
-                folder_name VARCHAR(100),
+                status VARCHAR(50) NOT NULL DEFAULT 'active',
+                folder_name VARCHAR(100) NOT NULL DEFAULT '',
                 tags VARCHAR(500),
-                is_locked BOOLEAN DEFAULT FALSE,
-                locked_by INTEGER REFERENCES users(id),
+                is_locked BOOLEAN NOT NULL DEFAULT FALSE,
+                locked_by INTEGER REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT ck_documents_status CHECK (status IN ('active','archived','draft','deleted')),
+                CONSTRAINT ck_documents_lock CHECK ((is_locked = FALSE AND locked_by IS NULL) OR (is_locked = TRUE AND locked_by IS NOT NULL)),
+                CONSTRAINT ck_documents_tags_fmt CHECK (tags ~ '^[A-Za-z0-9_\\-]+(,[A-Za-z0-9_\\-]+)*$' OR tags IS NULL)
             )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_documents_owner_updated ON documents (owner_id, updated_at DESC)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_documents_folder ON documents (folder_name)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_documents_status ON documents (status)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_documents_created_at ON documents (created_at)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_documents_updated_at ON documents (updated_at)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_documents_tags_fts ON documents USING GIN (to_tsvector('simple', tags))
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_documents_search_fts ON documents USING GIN (to_tsvector('simple', title || ' ' || content))
         """)
 
         # Document versions table
         conn.execute("""
             CREATE TABLE IF NOT EXISTS document_versions (
                 id SERIAL PRIMARY KEY,
-                document_id INTEGER REFERENCES documents(id),
-                user_id INTEGER REFERENCES users(id),
+                document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE ON UPDATE CASCADE,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE,
                 version_number INTEGER NOT NULL,
                 content_snapshot TEXT NOT NULL,
                 summary VARCHAR(500),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT uq_doc_versions_doc_ver UNIQUE (document_id, version_number),
+                CONSTRAINT ck_doc_versions_ver CHECK (version_number > 0)
             )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_doc_versions_doc_ver ON document_versions (document_id, version_number DESC)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_doc_versions_doc ON document_versions (document_id)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_doc_versions_created ON document_versions (created_at)
         """)
 
         # Operation logs table
         conn.execute("""
             CREATE TABLE IF NOT EXISTS operation_logs (
                 id SERIAL PRIMARY KEY,
-                user_id INTEGER REFERENCES users(id),
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE SET NULL ON UPDATE CASCADE,
                 action VARCHAR(100) NOT NULL,
-                resource_type VARCHAR(50),
-                resource_id INTEGER,
+                resource_type VARCHAR(50) NOT NULL,
+                resource_id INTEGER NOT NULL,
                 description TEXT,
                 ip_address VARCHAR(50),
                 user_agent VARCHAR(500),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_op_logs_user_time ON operation_logs (user_id, created_at DESC)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_op_logs_resource ON operation_logs (resource_type, resource_id)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_op_logs_action ON operation_logs (action)
         """)
 
         # Permissions table
@@ -103,9 +152,16 @@ def init_db():
             CREATE TABLE IF NOT EXISTS role_permissions (
                 id SERIAL PRIMARY KEY,
                 role VARCHAR(20) NOT NULL,
-                permission_id INTEGER REFERENCES permissions(id),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                permission_id INTEGER NOT NULL REFERENCES permissions(id) ON DELETE CASCADE ON UPDATE CASCADE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT uq_role_permissions UNIQUE (role, permission_id)
             )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_role_permissions_role ON role_permissions (role)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_role_permissions_perm ON role_permissions (permission_id)
         """)
 
         # Document templates table
@@ -115,11 +171,19 @@ def init_db():
                 name VARCHAR(200) NOT NULL,
                 description TEXT,
                 content TEXT NOT NULL,
-                category VARCHAR(100) DEFAULT 'general',
-                is_active BOOLEAN DEFAULT TRUE,
+                category VARCHAR(100) NOT NULL DEFAULT 'general',
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT uq_doc_templates_name UNIQUE (name),
+                CONSTRAINT ck_doc_templates_category CHECK (char_length(category) <= 100)
             )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_doc_templates_category_active ON document_templates (category, is_active)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_doc_templates_updated ON document_templates (updated_at)
         """)
 
         # ACL table
@@ -128,13 +192,23 @@ def init_db():
                 id SERIAL PRIMARY KEY,
                 resource_type VARCHAR(50) NOT NULL,
                 resource_id INTEGER NOT NULL,
-                user_id INTEGER REFERENCES users(id),
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE,
                 role VARCHAR(20),
                 permission VARCHAR(100) NOT NULL,
-                granted BOOLEAN DEFAULT TRUE,
+                granted BOOLEAN NOT NULL DEFAULT TRUE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT uq_acls_user_perm UNIQUE (resource_type, resource_id, user_id, permission)
             )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_acls_user_res ON acls (user_id, resource_type, resource_id)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_acls_role_res ON acls (role, resource_type, resource_id)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_acls_res ON acls (resource_type, resource_id)
         """)
 
         # 插入默认模板

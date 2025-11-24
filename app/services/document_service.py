@@ -14,13 +14,18 @@ def _escape(value: str | None) -> str:
     escaped_value = value.replace("'", "''")
     return f"'{escaped_value}'"
 
+def _format_bool(value: bool | None) -> str:
+    if value is None:
+        return "NULL"
+    return "TRUE" if value else "FALSE"
+
 def _format_datetime(dt: datetime | None) -> str:
     """格式化日期时间为 SQL 字符串"""
     if dt is None:
         return "NULL"
     return f"'{dt.strftime('%Y-%m-%d %H:%M:%S')}'"
 
-def get_documents(db, owner_id: int, skip: int = 0, limit: int = 100, folder: str = None):
+def get_documents(db, owner_id: int, skip: int = 0, limit: int = 100, folder: str = None, status: str = None, tag: str = None):
     """获取文档列表 - 使用 py-opengauss 的 query 方法"""
     where_conditions = [f"owner_id = {owner_id}"]
     
@@ -28,6 +33,14 @@ def get_documents(db, owner_id: int, skip: int = 0, limit: int = 100, folder: st
         folder_safe = _escape(folder)
         where_conditions.append(f"folder_name = {folder_safe}")
     
+    if status:
+        status_safe = _escape(status)
+        where_conditions.append(f"status = {status_safe}")
+
+    if tag:
+        tag_query = _escape(tag)
+        where_conditions.append(f"to_tsvector('simple', tags) @@ plainto_tsquery({tag_query})")
+
     where_clause = " WHERE " + " AND ".join(where_conditions)
     
     # 使用 py-opengauss 的 query 方法查询
@@ -91,13 +104,17 @@ def create_document(db, document: DocumentCreate, owner_id: int):
     title_safe = _escape(document.title)
     content_safe = _escape(document.content)
     status_safe = _escape(status)
+    folder_safe = _escape(document.folder_name) if getattr(document, "folder_name", None) is not None else "NULL"
+    tags_safe = _escape(document.tags) if getattr(document, "tags", None) is not None else "NULL"
     now_sql = _format_datetime(now)
-    
-    # 使用 py-opengauss 的 execute 方法插入文档数据
-    db.execute(f"INSERT INTO documents (title, content, status, owner_id, created_at, updated_at) VALUES ({title_safe}, {content_safe}, {status_safe}, {owner_id}, {now_sql}, {now_sql})")
+
+    db.execute(
+        f"INSERT INTO documents (title, content, status, owner_id, folder_name, tags, created_at, updated_at) "
+        f"VALUES ({title_safe}, {content_safe}, {status_safe}, {owner_id}, {folder_safe}, {tags_safe}, {now_sql}, {now_sql})"
+    )
     
     # 获取刚插入的文档数据
-    rows = db.query(f"SELECT id, owner_id, title, content, status, created_at, updated_at FROM documents WHERE owner_id = {owner_id} ORDER BY id DESC LIMIT 1")
+    rows = db.query(f"SELECT id, owner_id, title, content, status, folder_name, tags, created_at, updated_at FROM documents WHERE owner_id = {owner_id} ORDER BY id DESC LIMIT 1")
     
     if rows:
         result = rows[0]
@@ -107,8 +124,10 @@ def create_document(db, document: DocumentCreate, owner_id: int):
             'title': result[2],
             'content': result[3],
             'status': result[4],
-            'created_at': result[5],
-            'updated_at': result[6]
+            'folder_name': result[5],
+            'tags': result[6],
+            'created_at': result[7],
+            'updated_at': result[8]
         }
     return None
 
@@ -207,26 +226,33 @@ def create_document_version(db, document_id: int, user_id: int, content: str, su
     Returns:
         创建的版本对象
     """
-    # 获取当前文档的最新版本号
-    rows = db.query(f"SELECT version_number FROM document_versions WHERE document_id = {document_id} ORDER BY version_number DESC LIMIT 1")
-    
-    version_number = 1
-    if rows:
-        version_number = rows[0][0] + 1
-    
     now = datetime.utcnow()
-    
-    # 构造安全的 SQL 字符串
+
     content_safe = _escape(content)
     summary_safe = _escape(summary)
     now_sql = _format_datetime(now)
-    
-    # 使用 py-opengauss 的 execute 方法插入版本数据
-    db.execute(f"INSERT INTO document_versions (document_id, user_id, version_number, content_snapshot, summary, created_at) VALUES ({document_id}, {user_id}, {version_number}, {content_safe}, {summary_safe}, {now_sql})")
-    
-    # 获取刚插入的版本数据
-    rows = db.query(f"SELECT id, document_id, user_id, version_number, content_snapshot, summary, created_at FROM document_versions WHERE document_id = {document_id} AND user_id = {user_id} ORDER BY version_number DESC LIMIT 1")
-    
+
+    try:
+        db.execute("BEGIN")
+        rows = db.query(
+            f"SELECT COALESCE(MAX(version_number), 0) FROM document_versions WHERE document_id = {document_id} FOR UPDATE"
+        )
+        next_version = (rows[0][0] if rows else 0) + 1
+        db.execute(
+            f"INSERT INTO document_versions (document_id, user_id, version_number, content_snapshot, summary, created_at) "
+            f"VALUES ({document_id}, {user_id}, {next_version}, {content_safe}, {summary_safe}, {now_sql})"
+        )
+        db.execute("COMMIT")
+    except Exception:
+        db.execute("ROLLBACK")
+        logger.exception("创建文档版本失败，可能存在并发冲突")
+        raise
+
+    rows = db.query(
+        f"SELECT id, document_id, user_id, version_number, content_snapshot, summary, created_at "
+        f"FROM document_versions WHERE document_id = {document_id} ORDER BY version_number DESC LIMIT 1"
+    )
+
     if rows:
         result = rows[0]
         return {
@@ -419,11 +445,11 @@ def delete_template(db, template_id: int):
     return True
 
 # 搜索和分类相关服务函数
-def search_documents(db, owner_id: int, keyword: str = None, tags: str = None, 
+def search_documents(db, owner_id: int, keyword: str = None, tags: str = None,
                    folder: str = None, sort_by: str = "updated_at", order: str = "desc",
-                   created_from: str = None, created_to: str = None, 
+                   created_from: str = None, created_to: str = None,
                    updated_from: str = None, updated_to: str = None,
-                   skip: int = 0, limit: int = 100):
+                   skip: int = 0, limit: int = 100, status: str = None):
     """搜索文档 - 使用 py-opengauss 的 query 方法"""
     where_conditions = [f"owner_id = {owner_id}"]
     
@@ -434,13 +460,22 @@ def search_documents(db, owner_id: int, keyword: str = None, tags: str = None,
     
     # 标签搜索
     if tags:
-        tags_safe = _escape(f"%{tags}%")
-        where_conditions.append(f"tags ILIKE {tags_safe}")
+        tag_query = _escape(tags)
+        where_conditions.append(f"to_tsvector('simple', tags) @@ plainto_tsquery({tag_query})")
+
+    # 状态筛选
+    if status:
+        status_safe = _escape(status)
+        where_conditions.append(f"status = {status_safe}")
     
     # 文件夹搜索
     if folder:
         folder_safe = _escape(folder)
         where_conditions.append(f"folder_name = {folder_safe}")
+
+    # 排序字段兜底
+    if sort_by and sort_by not in ["title", "created_at", "updated_at"]:
+        sort_by = "updated_at"
     
     # 日期范围搜索
     if created_from:
@@ -525,11 +560,17 @@ def get_tags(db, owner_id: int):
 def lock_document(db, document_id: int, user_id: int):
     """锁定文档 - 使用 py-opengauss 的 execute 方法"""
     now_sql = _format_datetime(datetime.utcnow())
-    db.execute(f"UPDATE documents SET is_locked = TRUE, locked_by = {user_id}, updated_at = {now_sql} WHERE id = {document_id}")
-    return True
+    affected = db.execute(
+        f"UPDATE documents SET is_locked = TRUE, locked_by = {user_id}, updated_at = {now_sql} "
+        f"WHERE id = {document_id} AND (is_locked = FALSE OR locked_by = {user_id})"
+    )
+    return affected is None or affected > 0
 
 def unlock_document(db, document_id: int, user_id: int):
     """解锁文档 - 使用 py-opengauss 的 execute 方法"""
     now_sql = _format_datetime(datetime.utcnow())
-    db.execute(f"UPDATE documents SET is_locked = FALSE, locked_by = NULL, updated_at = {now_sql} WHERE id = {document_id} AND locked_by = {user_id}")
-    return True
+    affected = db.execute(
+        f"UPDATE documents SET is_locked = FALSE, locked_by = NULL, updated_at = {now_sql} "
+        f"WHERE id = {document_id} AND locked_by = {user_id}"
+    )
+    return affected is None or affected > 0
