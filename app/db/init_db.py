@@ -88,6 +88,43 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_documents_search_fts ON documents USING GIN (to_tsvector('simple', title || ' ' || content))
         """)
 
+        # Comments table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS comments (
+                id SERIAL PRIMARY KEY,
+                document_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                content TEXT NOT NULL,
+                range_start INTEGER NULL,
+                range_end INTEGER NULL,
+                parent_id INTEGER NULL,
+                mentions TEXT NULL,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_comments_doc ON comments (document_id, created_at)
+        """)
+
+        # Tasks table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tasks (
+                id SERIAL PRIMARY KEY,
+                document_id INTEGER NOT NULL,
+                creator_id INTEGER NOT NULL,
+                assignee_id INTEGER NULL,
+                title VARCHAR(255) NOT NULL,
+                description TEXT NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'TODO',
+                due_at DATE NULL,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tasks_doc ON tasks (document_id, status)
+        """)
+
         # Document versions table
         conn.execute("""
             CREATE TABLE IF NOT EXISTS document_versions (

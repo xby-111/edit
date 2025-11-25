@@ -14,6 +14,11 @@ from app.schemas import (
     Document,
     DocumentCreate,
     DocumentUpdate,
+    Comment,
+    CommentCreate,
+    Task,
+    TaskCreate,
+    TaskUpdate,
     Template,
     TemplateCreate,
     TemplateUpdate,
@@ -37,6 +42,8 @@ from app.services.document_service import (
     update_document,
     update_template,
 )
+from app.services.comment_service import create_comment, list_comments
+from app.services.task_service import create_task, list_tasks, update_task
 
 logger = logging.getLogger(__name__)
 
@@ -588,7 +595,7 @@ async def update_template_endpoint(
 @router.delete("/templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT, summary="删除模板", description="删除指定的模板")
 async def delete_template_endpoint(
     template_id: int,
-    current_user = Depends(get_current_user), 
+    current_user = Depends(get_current_user),
     db = Depends(get_db)
 ):
     """删除模板"""
@@ -601,3 +608,78 @@ async def delete_template_endpoint(
     except Exception as e:
         logger.error("删除模板失败: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail="删除模板失败")
+
+
+# ==================== 评论与任务基础接口 ====================
+
+
+@router.get("/documents/{document_id}/comments", response_model=List[Comment], summary="获取文档评论")
+async def get_document_comments(document_id: int, current_user=Depends(get_current_user), db=Depends(get_db)):
+    try:
+        return list_comments(db, document_id)
+    except Exception as e:
+        logger.error("获取评论失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="获取评论失败")
+
+
+@router.post("/documents/{document_id}/comments", response_model=Comment, summary="创建评论")
+async def create_document_comment(
+    document_id: int,
+    comment_in: CommentCreate,
+    current_user=Depends(get_current_user),
+    db=Depends(get_db),
+):
+    try:
+        return create_comment(
+            db,
+            document_id,
+            current_user.id,
+            comment_in.content,
+            comment_in.range_start,
+            comment_in.range_end,
+            comment_in.parent_id,
+            comment_in.mentions,
+        )
+    except Exception as e:
+        logger.error("创建评论失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="创建评论失败")
+
+
+@router.get("/documents/{document_id}/tasks", response_model=List[Task], summary="获取文档任务")
+async def get_document_tasks(document_id: int, current_user=Depends(get_current_user), db=Depends(get_db)):
+    try:
+        return list_tasks(db, document_id)
+    except Exception as e:
+        logger.error("获取任务失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="获取任务失败")
+
+
+@router.post("/documents/{document_id}/tasks", response_model=Task, summary="创建任务")
+async def create_document_task(
+    document_id: int,
+    task_in: TaskCreate,
+    current_user=Depends(get_current_user),
+    db=Depends(get_db),
+):
+    try:
+        return create_task(
+            db,
+            document_id,
+            current_user.id,
+            task_in.title,
+            task_in.description,
+            task_in.assignee_id,
+            task_in.due_at,
+        )
+    except Exception as e:
+        logger.error("创建任务失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="创建任务失败")
+
+
+@router.patch("/tasks/{task_id}", response_model=Task, summary="更新任务")
+async def update_task_endpoint(task_id: int, task_in: TaskUpdate, current_user=Depends(get_current_user), db=Depends(get_db)):
+    try:
+        return update_task(db, task_id, status=task_in.status, due_at=task_in.due_at, assignee_id=task_in.assignee_id)
+    except Exception as e:
+        logger.error("更新任务失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="更新任务失败")
