@@ -98,6 +98,11 @@ class ApiClient {
         return this.request('/documents');
     }
 
+    // 获取共享文档列表
+    async getSharedDocuments() {
+        return this.request('/documents/shared');
+    }
+
     // 创建文档
     async createDocument(title, content = '', status = 'active') {
         return this.request('/documents', {
@@ -192,7 +197,14 @@ class ApiClient {
 
     // 导出文档
     async exportDocument(id, format = 'html') {
-        const response = await fetch(`${this.baseURL}/api/v1/documents/${id}/export?format=${format}`, {
+        // 确保 format 是字符串，防止传入 Promise
+        const formatStr = String(format);
+        const validFormats = ['html', 'markdown'];
+        if (!validFormats.includes(formatStr)) {
+            throw new Error(`无效的导出格式: ${formatStr}。支持的格式: ${validFormats.join(', ')}`);
+        }
+
+        const response = await fetch(`${this.baseURL}/api/v1/documents/${id}/export?format=${formatStr}`, {
             method: 'GET',
             headers: {
                 'Authorization': `Bearer ${this.token}`
@@ -269,8 +281,21 @@ function formatDate(dateString) {
 // 加载文档列表
 async function loadDocuments(folder = null) {
     try {
-        const documents = await api.getDocuments(folder);
-        renderDocumentList(documents);
+        const [ownedDocuments, sharedDocuments] = await Promise.all([
+            api.getDocuments(folder),
+            api.getSharedDocuments()
+        ]);
+        
+        // 合并显示拥有的文档和共享的文档
+        const allDocuments = [
+            ...ownedDocuments.map(doc => ({ ...doc, is_shared: false })),
+            ...sharedDocuments.map(doc => ({ ...doc, is_shared: true }))
+        ];
+        
+        // 按更新时间排序
+        allDocuments.sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+        
+        renderDocumentList(allDocuments);
     } catch (error) {
         console.error('加载文档列表失败:', error);
         showError('document-error', '加载文档列表失败: ' + error.message);
@@ -289,20 +314,23 @@ const renderDocumentList = (documents) => {
         documentList.innerHTML = documents.map(doc => {
             const tags = doc.tags ? doc.tags.split(',').map(tag => `<span class="tag">${tag.trim()}</span>`).join('') : '';
             const lockStatus = doc.is_locked ? '<span style="color: #f44336;">🔒 已锁定</span>' : '';
+            const sharedBadge = doc.is_shared ? '<span style="background-color: #4CAF50; color: white; padding: 2px 6px; border-radius: 3px; font-size: 12px; margin-left: 5px;">共享</span>' : '';
+            const ownerInfo = doc.is_shared ? `<p style="font-size: 12px; color: #666;">所有者ID: ${doc.owner_id}</p>` : '';
             
             return `
                 <div class="document-item">
                     <div class="document-info">
-                        <h3>${doc.title} ${lockStatus}</h3>
+                        <h3>${doc.title} ${lockStatus} ${sharedBadge}</h3>
                         <p>文件夹: ${doc.folder_name || '未分类'} | 标签: ${tags || '无'}</p>
                         <p>创建时间: ${formatDate(doc.created_at)} | 更新时间: ${formatDate(doc.updated_at)}</p>
+                        ${ownerInfo}
                     </div>
                     <div class="document-actions">
                         <button class="btn-small btn-primary" onclick="openDocument(${doc.id})" ${doc.is_locked ? 'disabled' : ''}>打开协同编辑</button>
                         <button class="btn-small btn-info" onclick="exportDocument(${doc.id})">导出</button>
-                        ${doc.is_locked ? '' : `<button class="btn-small btn-warning" onclick="lockDocument(${doc.id})">锁定</button>`}
-                        ${doc.is_locked && doc.locked_by === getCurrentUserId() ? `<button class="btn-small btn-success" onclick="unlockDocument(${doc.id})">解锁</button>` : ''}
-                        <button class="btn-small btn-danger" onclick="deleteDocument(${doc.id})">删除</button>
+                        ${!doc.is_shared && !doc.is_locked ? `<button class="btn-small btn-warning" onclick="lockDocument(${doc.id})">锁定</button>` : ''}
+                        ${!doc.is_shared && doc.is_locked && doc.locked_by === getCurrentUserId() ? `<button class="btn-small btn-success" onclick="unlockDocument(${doc.id})">解锁</button>` : ''}
+                        ${!doc.is_shared ? `<button class="btn-small btn-danger" onclick="deleteDocument(${doc.id})">删除</button>` : ''}
                     </div>
                 </div>
             `;

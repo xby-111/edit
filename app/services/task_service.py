@@ -8,7 +8,8 @@ from typing import Dict, List, Optional
 def _escape(value: Optional[str]) -> str:
     if value is None:
         return "NULL"
-    return f"'{value.replace("'", "''")}'"
+    escaped = value.replace("'", "''")
+    return f"'{escaped}'"
 
 
 def _row_to_task(row) -> Dict:
@@ -16,6 +17,7 @@ def _row_to_task(row) -> Dict:
         "id": row[0],
         "document_id": row[1],
         "creator_id": row[2],
+        "created_by": row[2],  # 映射为 created_by 以满足 schema 要求
         "assignee_id": row[3],
         "title": row[4],
         "description": row[5],

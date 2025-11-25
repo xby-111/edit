@@ -10,15 +10,12 @@ from fastapi.responses import Response
 
 from app.core.security import get_current_user
 from app.db.session import get_db
+from app.schemas.comment import Comment, CommentCreate
+from app.schemas.task import Task, TaskCreate, TaskUpdate
 from app.schemas import (
     Document,
     DocumentCreate,
     DocumentUpdate,
-    Comment,
-    CommentCreate,
-    Task,
-    TaskCreate,
-    TaskUpdate,
     Template,
     TemplateCreate,
     TemplateUpdate,
@@ -41,6 +38,13 @@ from app.services.document_service import (
     unlock_document,
     update_document,
     update_template,
+    add_collaborator,
+    batch_add_collaborators,
+    remove_collaborator,
+    get_collaborators,
+    get_shared_documents,
+    check_document_permission,
+    is_document_owner,
 )
 from app.services.comment_service import create_comment, list_comments
 from app.services.task_service import create_task, list_tasks, update_task
@@ -130,7 +134,7 @@ def markdownToHtml(markdown: str) -> str:
 
 # ==================== 文档列表 / 搜索 / 标签 / 文件夹相关路由 ====================
 
-@router.get("/documents", response_model=List[Document], summary="获取文档列表", description="获取当前用户有权限访问的所有文档")
+@router.get("/documents", response_model=List[Document], summary="获取文档列表", description="获取当前用户拥有的文档列表")
 async def get_documents_endpoint(
     current_user = Depends(get_current_user), 
     db = Depends(get_db),
@@ -138,7 +142,7 @@ async def get_documents_endpoint(
     limit: int = 100,
     folder: Optional[str] = None
 ):
-    """获取当前用户的文档列表"""
+    """获取当前用户拥有的文档列表"""
     documents = get_documents(db, current_user.id, skip=skip, limit=limit, folder=folder)
     return documents
 
@@ -362,6 +366,37 @@ async def create_document_endpoint(
         raise HTTPException(status_code=500, detail="创建文档失败")
 
 
+@router.get("/documents/shared", response_model=List[Document], summary="获取共享文档列表", description="获取当前用户作为协作者的文档列表")
+async def get_shared_documents_endpoint(
+    current_user = Depends(get_current_user), 
+    db = Depends(get_db),
+    skip: int = 0,
+    limit: int = 100
+):
+    """获取共享文档列表"""
+    try:
+        documents = get_shared_documents(db, current_user.id, skip=skip, limit=limit)
+        return [
+            Document(
+                id=doc['id'],
+                owner_id=doc['owner_id'],
+                title=doc['title'],
+                content=doc['content'],
+                status=doc['status'],
+                folder_name=doc.get('folder_name'),
+                tags=doc.get('tags'),
+                is_locked=doc.get('is_locked', False),
+                locked_by=doc.get('locked_by'),
+                created_at=doc['created_at'],
+                updated_at=doc['updated_at']
+            )
+            for doc in documents
+        ]
+    except Exception as e:
+        logger.error("获取共享文档列表失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="获取共享文档列表失败")
+
+
 @router.get("/documents/{document_id}", response_model=Document, summary="获取文档详情", description="根据文档ID获取文档详细内容")
 async def get_document_endpoint(
     document_id: int, 
@@ -369,9 +404,10 @@ async def get_document_endpoint(
     db = Depends(get_db)
 ):
     """获取文档详情"""
-    document = get_document(db, document_id, current_user.id)
+    from app.services.document_service import get_document_with_collaborators
+    document = get_document_with_collaborators(db, document_id, current_user.id)
     if not document:
-        raise HTTPException(status_code=404, detail="文档不存在")
+        raise HTTPException(status_code=404, detail="文档不存在或无权限")
     return Document(
         id=document['id'],
         owner_id=document['owner_id'],
@@ -395,16 +431,26 @@ async def update_document_endpoint(
     db = Depends(get_db)
 ):
     """更新文档"""
-    # 检查文档是否被锁定
-    document = get_document(db, document_id, current_user.id)
-    if not document:
-        raise HTTPException(status_code=404, detail="文档不存在")
+    from app.services.document_service import get_document_with_collaborators, check_document_permission
     
+    # 检查文档权限
+    document = get_document_with_collaborators(db, document_id, current_user.id)
+    if not document:
+        raise HTTPException(status_code=404, detail="文档不存在或无权限")
+    
+    # 检查编辑权限
+    permission = check_document_permission(db, document_id, current_user.id)
+    if not permission["can_edit"]:
+        raise HTTPException(status_code=403, detail="无编辑权限")
+    
+    # 检查文档是否被锁定
     if document.get('is_locked') and document.get('locked_by') != current_user.id:
         raise HTTPException(status_code=403, detail="文档已被锁定，无法编辑")
     
     try:
-        updated_document = update_document(db, document_id, document_update, current_user.id)
+        # 使用所有者ID进行更新，确保权限正确
+        owner_id = document['owner_id']
+        updated_document = update_document(db, document_id, document_update, owner_id)
         if not updated_document:
             raise HTTPException(status_code=404, detail="文档不存在")
         
@@ -614,7 +660,16 @@ async def delete_template_endpoint(
 
 
 @router.get("/documents/{document_id}/comments", response_model=List[Comment], summary="获取文档评论")
-async def get_document_comments(document_id: int, current_user=Depends(get_current_user), db=Depends(get_db)):
+async def get_document_comments(
+    document_id: int,
+    current_user=Depends(get_current_user),
+    db=Depends(get_db)
+):
+    # 先校验文档存在且用户有权限
+    doc = get_document(db, document_id, current_user.id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="文档不存在或无权访问")
+    
     try:
         return list_comments(db, document_id)
     except Exception as e:
@@ -629,16 +684,21 @@ async def create_document_comment(
     current_user=Depends(get_current_user),
     db=Depends(get_db),
 ):
+    # 先校验文档存在且用户有权限
+    doc = get_document(db, document_id, current_user.id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="文档不存在或无权访问")
+        
     try:
         return create_comment(
             db,
             document_id,
             current_user.id,
             comment_in.content,
-            comment_in.range_start,
-            comment_in.range_end,
-            comment_in.parent_id,
-            comment_in.mentions,
+            comment_in.line_no,
+            None,
+            None,
+            None,
         )
     except Exception as e:
         logger.error("创建评论失败: %s", e, exc_info=True)
@@ -647,6 +707,11 @@ async def create_document_comment(
 
 @router.get("/documents/{document_id}/tasks", response_model=List[Task], summary="获取文档任务")
 async def get_document_tasks(document_id: int, current_user=Depends(get_current_user), db=Depends(get_db)):
+    # 先校验文档存在且用户有权限
+    doc = get_document(db, document_id, current_user.id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="文档不存在或无权访问")
+        
     try:
         return list_tasks(db, document_id)
     except Exception as e:
@@ -661,15 +726,22 @@ async def create_document_task(
     current_user=Depends(get_current_user),
     db=Depends(get_db),
 ):
+    # 先校验文档存在且用户有权限
+    doc = get_document(db, document_id, current_user.id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="文档不存在或无权访问")
+        
     try:
+        assignee_id = getattr(task_in, 'assignee_id', None) or getattr(task_in, 'assigned_to', None)
+        due = getattr(task_in, "due_at", None) or getattr(task_in, "due_date", None) or getattr(task_in, "deadline", None)
         return create_task(
             db,
             document_id,
             current_user.id,
             task_in.title,
             task_in.description,
-            task_in.assignee_id,
-            task_in.due_at,
+            assignee_id,
+            due,
         )
     except Exception as e:
         logger.error("创建任务失败: %s", e, exc_info=True)
@@ -677,9 +749,236 @@ async def create_document_task(
 
 
 @router.patch("/tasks/{task_id}", response_model=Task, summary="更新任务")
-async def update_task_endpoint(task_id: int, task_in: TaskUpdate, current_user=Depends(get_current_user), db=Depends(get_db)):
+async def update_task_endpoint(
+    task_id: int,
+    task_in: TaskUpdate,
+    current_user=Depends(get_current_user),
+    db=Depends(get_db)
+):
+    # 先获取任务信息以检查所属文档
+    task = get_document(db, None, current_user.id, task_id=task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在或无权访问")
+        
     try:
-        return update_task(db, task_id, status=task_in.status, due_at=task_in.due_at, assignee_id=task_in.assignee_id)
+        due = getattr(task_in, "due_at", None) or getattr(task_in, "due_date", None) or getattr(task_in, "deadline", None)
+        return update_task(db, task_id, status=task_in.status, due_at=due, assignee_id=task_in.assignee_id)
     except Exception as e:
         logger.error("更新任务失败: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail="更新任务失败")
+
+
+# ==================== 文档共享相关路由 ====================
+
+@router.post("/documents/{document_id}/collaborators", summary="添加文档协作者", description="为文档添加协作者")
+async def add_collaborator_endpoint(
+    document_id: int,
+    collaborator_data: dict,
+    current_user = Depends(get_current_user), 
+    db = Depends(get_db)
+):
+    """添加文档协作者"""
+    # 验证请求数据
+    username = collaborator_data.get("username")
+    role = collaborator_data.get("role", "editor")
+    
+    if not username:
+        raise HTTPException(status_code=400, detail="缺少用户名")
+    
+    if role not in ["editor", "viewer"]:
+        raise HTTPException(status_code=400, detail="角色只能是 editor 或 viewer")
+    
+    # 检查文档是否存在且用户为所有者
+    if not is_document_owner(db, document_id, current_user.id):
+        raise HTTPException(status_code=404, detail="文档不存在或无权限")
+    
+    # 获取协作者用户ID
+    try:
+        from app.services.user_service import get_user_by_username, _escape
+        username_safe = _escape(username)
+        user_rows = db.query(f"SELECT id FROM users WHERE username = {username_safe} LIMIT 1")
+        
+        if not user_rows:
+            raise HTTPException(status_code=404, detail="协作用户不存在")
+            
+        collaborator_user_id = user_rows[0][0]
+        
+        # 不能添加自己为协作者
+        if collaborator_user_id == current_user.id:
+            raise HTTPException(status_code=400, detail="不能添加自己为协作者")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("获取协作用户信息失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="获取用户信息失败")
+    
+    # 添加协作者
+    try:
+        success = add_collaborator(db, document_id, current_user.id, collaborator_user_id, role)
+        if not success:
+            raise HTTPException(status_code=500, detail="添加协作者失败")
+            
+        return {"message": f"已成功添加 {username} 为文档协作者", "role": role}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("添加协作者失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="添加协作者失败")
+
+
+@router.post("/documents/{document_id}/collaborators/batch", summary="批量添加文档协作者", description="批量添加多个协作者")
+async def batch_add_collaborators_endpoint(
+    document_id: int,
+    batch_data: dict,
+    current_user = Depends(get_current_user), 
+    db = Depends(get_db)
+):
+    """批量添加文档协作者"""
+    users = batch_data.get("users", [])
+    
+    if not users:
+        raise HTTPException(status_code=400, detail="用户列表不能为空")
+    
+    # 检查文档是否存在且用户为所有者
+    if not is_document_owner(db, document_id, current_user.id):
+        raise HTTPException(status_code=404, detail="文档不存在或无权限")
+    
+    # 批量添加协作者
+    try:
+        results = batch_add_collaborators(db, document_id, current_user.id, users)
+        
+        # 统计成功和失败数量
+        success_count = sum(1 for r in results if r["success"])
+        failed_count = len(results) - success_count
+        
+        return {
+            "message": f"批量添加完成：成功 {success_count} 个，失败 {failed_count} 个",
+            "success": success_count,
+            "failed": failed_count,
+            "results": results
+        }
+        
+    except Exception as e:
+        logger.error("批量添加协作者失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="批量添加协作者失败")
+
+
+@router.get("/documents/{document_id}/collaborators", summary="获取文档协作者列表", description="获取文档的所有协作者")
+async def get_collaborators_endpoint(
+    document_id: int,
+    current_user = Depends(get_current_user), 
+    db = Depends(get_db)
+):
+    """获取文档协作者列表"""
+    # 检查文档权限
+    permission = check_document_permission(db, document_id, current_user.id)
+    
+    if not permission["can_view"]:
+        raise HTTPException(status_code=403, detail="无权限查看此文档")
+    
+    try:
+        collaborators = get_collaborators(db, document_id, current_user.id)
+        return {"collaborators": collaborators}
+        
+    except Exception as e:
+        logger.error("获取协作者列表失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="获取协作者列表失败")
+
+
+@router.delete("/documents/{document_id}/collaborators/{user_id}", summary="移除文档协作者", description="从文档中移除指定的协作者")
+async def remove_collaborator_endpoint(
+    document_id: int,
+    user_id: int,
+    current_user = Depends(get_current_user), 
+    db = Depends(get_db)
+):
+    """移除文档协作者"""
+    # 检查文档是否存在且用户为所有者
+    if not is_document_owner(db, document_id, current_user.id):
+        raise HTTPException(status_code=404, detail="文档不存在或无权限")
+    
+    try:
+        success = remove_collaborator(db, document_id, current_user.id, user_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="协作者不存在或移除失败")
+            
+        return {"message": "协作者已成功移除"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("移除协作者失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="移除协作者失败")
+        raise HTTPException(status_code=400, detail="缺少用户列表")
+    
+    # 检查文档是否存在且用户为所有者
+    if not is_document_owner(db, document_id, current_user.id):
+        raise HTTPException(status_code=404, detail="文档不存在或无权限")
+    
+    # 批量添加协作者
+    try:
+        results = batch_add_collaborators(db, document_id, current_user.id, users)
+        
+        # 统计成功和失败数量
+        success_count = sum(1 for r in results if r.get("success"))
+        failed_count = len(results) - success_count
+        
+        return {
+            "total": len(results),
+            "success": success_count,
+            "failed": failed_count,
+            "results": results
+        }
+        
+    except Exception as e:
+        logger.error("批量添加协作者失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="批量添加协作者失败")
+
+
+@router.delete("/documents/{document_id}/collaborators/{user_id}", summary="移除文档协作者", description="从文档中移除指定协作者")
+async def remove_collaborator_endpoint(
+    document_id: int,
+    user_id: int,
+    current_user = Depends(get_current_user), 
+    db = Depends(get_db)
+):
+    """移除文档协作者"""
+    # 检查文档是否存在且用户为所有者
+    if not is_document_owner(db, document_id, current_user.id):
+        raise HTTPException(status_code=404, detail="文档不存在或无权限")
+    
+    # 不能移除自己
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="不能移除自己")
+    
+    # 移除协作者
+    try:
+        success = remove_collaborator(db, document_id, current_user.id, user_id)
+        if not success:
+            raise HTTPException(status_code=500, detail="移除协作者失败")
+            
+        return {"message": "协作者已成功移除"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("移除协作者失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="移除协作者失败")
+
+
+@router.get("/documents/{document_id}/collaborators", summary="获取文档协作者列表", description="获取文档的所有协作者")
+async def get_document_collaborators_endpoint(
+    document_id: int,
+    current_user = Depends(get_current_user), 
+    db = Depends(get_db)
+):
+    """获取文档协作者列表"""
+    try:
+        collaborators = get_collaborators(db, document_id, current_user.id)
+        return {"collaborators": collaborators}
+        
+    except Exception as e:
+        logger.error("获取协作者列表失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="获取协作者列表失败")

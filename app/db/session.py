@@ -80,3 +80,10 @@ def get_db():
     except Exception as e:
         logger.error(f"Database connection error: {e}", exc_info=True)
         raise
+
+
+def get_db_connection():
+    """
+    获取数据库连接（用于脚本等非FastAPI场景）
+    """
+    return conn

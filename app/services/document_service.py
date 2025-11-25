@@ -317,6 +317,318 @@ def get_document(db, document_id: int, owner_id: int) -> Optional[Dict]:
     return _get_document_by_id_and_owner(db, document_id, owner_id)
 
 
+def get_document_with_collaborators(db, document_id: int, user_id: int) -> Optional[Dict]:
+    """
+    获取文档详情（支持协作权限）
+    
+    Args:
+        db: 数据库连接对象
+        document_id: 文档ID
+        user_id: 用户ID
+        
+    Returns:
+        文档字典，如果用户无权限则返回 None
+    """
+    # 首先检查是否为所有者
+    doc = _get_document_by_id_and_owner(db, document_id, user_id)
+    if doc:
+        return doc
+    
+    # 检查是否为协作者
+    collab_rows = db.query(f"""
+        SELECT d.id, d.owner_id, d.title, d.content, d.status, d.folder_name, d.tags, 
+               d.is_locked, d.locked_by, d.created_at, d.updated_at 
+        FROM {TABLE_DOCUMENTS} d
+        INNER JOIN document_collaborators dc ON d.id = dc.document_id
+        WHERE d.id = {document_id} AND dc.user_id = {user_id}
+    """)
+    
+    if collab_rows:
+        return _row_to_document_dict(collab_rows[0])
+    
+    return None
+
+
+def check_document_permission(db, document_id: int, user_id: int) -> Dict[str, bool]:
+    """
+    检查用户对文档的权限
+    
+    Args:
+        db: 数据库连接对象
+        document_id: 文档ID
+        user_id: 用户ID
+        
+    Returns:
+        权限字典: {"can_view": bool, "can_edit": bool, "is_owner": bool}
+    """
+    # 检查是否为所有者
+    owner_rows = db.query(f"""
+        SELECT owner_id FROM {TABLE_DOCUMENTS} WHERE id = {document_id}
+    """)
+    
+    if owner_rows and owner_rows[0][0] == user_id:
+        return {"can_view": True, "can_edit": True, "is_owner": True}
+    
+    # 检查协作者权限
+    collab_rows = db.query(f"""
+        SELECT role FROM document_collaborators 
+        WHERE document_id = {document_id} AND user_id = {user_id}
+    """)
+    
+    if collab_rows:
+        role = collab_rows[0][0]
+        return {
+            "can_view": True, 
+            "can_edit": role == "editor",
+            "is_owner": False
+        }
+    
+    # 无权限
+    return {"can_view": False, "can_edit": False, "is_owner": False}
+
+
+def is_document_owner(db, document_id: int, user_id: int) -> bool:
+    """
+    检查用户是否为文档所有者
+    
+    Args:
+        db: 数据库连接对象
+        document_id: 文档ID
+        user_id: 用户ID
+        
+    Returns:
+        是否为所有者
+    """
+    owner_rows = db.query(f"""
+        SELECT owner_id FROM {TABLE_DOCUMENTS} WHERE id = {document_id}
+    """)
+    
+    return owner_rows and owner_rows[0][0] == user_id
+
+
+def add_collaborator(db, document_id: int, owner_id: int, collaborator_user_id: int, role: str = "editor") -> bool:
+    """
+    添加文档协作者
+    
+    Args:
+        db: 数据库连接对象
+        document_id: 文档ID
+        owner_id: 文档所有者ID
+        collaborator_user_id: 协作者用户ID
+        role: 协作者角色 (editor/viewer)
+        
+    Returns:
+        是否添加成功
+    """
+    # 验证所有者权限
+    owner_rows = db.query(f"""
+        SELECT owner_id FROM {TABLE_DOCUMENTS} WHERE id = {document_id}
+    """)
+    
+    if not owner_rows or owner_rows[0][0] != owner_id:
+        return False
+    
+    # 添加协作者
+    try:
+        role_safe = _escape(role)
+        logger.info(f"尝试添加协作者: document_id={document_id}, user_id={collaborator_user_id}, role={role}")
+        
+        # 先检查是否已存在
+        existing_rows = db.query(f"""
+            SELECT 1 FROM document_collaborators 
+            WHERE document_id = {document_id} AND user_id = {collaborator_user_id}
+        """)
+        
+        if existing_rows:
+            logger.info("协作者已存在，更新角色")
+            # 更新现有记录
+            db.execute(f"""
+                UPDATE document_collaborators 
+                SET role = {role_safe}
+                WHERE document_id = {document_id} AND user_id = {collaborator_user_id}
+            """)
+        else:
+            logger.info("插入新协作者记录")
+            # 插入新记录
+            db.execute(f"""
+                INSERT INTO document_collaborators (document_id, user_id, role)
+                VALUES ({document_id}, {collaborator_user_id}, {role_safe})
+            """)
+        
+        logger.info("协作者添加成功")
+        return True
+    except Exception as e:
+        logger.error(f"添加协作者失败: {e}", exc_info=True)
+        return False
+
+
+def batch_add_collaborators(db, document_id: int, owner_id: int, users: list) -> list:
+    """
+    批量添加文档协作者
+    
+    Args:
+        db: 数据库连接对象
+        document_id: 文档ID
+        owner_id: 文档所有者ID
+        users: 用户列表 [{"username": "xxx", "role": "editor"}, ...]
+        
+    Returns:
+        处理结果列表 [{"username": "xxx", "success": bool, "message": "xxx"}, ...]
+    """
+    # 验证所有者权限
+    owner_rows = db.query(f"""
+        SELECT owner_id FROM {TABLE_DOCUMENTS} WHERE id = {document_id}
+    """)
+    
+    if not owner_rows or owner_rows[0][0] != owner_id:
+        return [{"username": user.get("username"), "success": False, "message": "无权限操作"} for user in users]
+    
+    results = []
+    
+    for user_data in users:
+        username = user_data.get("username")
+        role = user_data.get("role", "editor")
+        
+        if not username:
+            results.append({"username": username, "success": False, "message": "用户名不能为空"})
+            continue
+            
+        if role not in ["editor", "viewer"]:
+            results.append({"username": username, "success": False, "message": "角色只能是 editor 或 viewer"})
+            continue
+        
+        try:
+            # 获取用户ID
+            from app.services.user_service import _escape
+            username_safe = _escape(username)
+            user_rows = db.query(f"SELECT id FROM users WHERE username = {username_safe} LIMIT 1")
+            
+            if not user_rows:
+                results.append({"username": username, "success": False, "message": "用户不存在"})
+                continue
+                
+            user_id = user_rows[0][0]
+            
+            # 不能添加自己为协作者
+            if user_id == owner_id:
+                results.append({"username": username, "success": False, "message": "不能添加自己为协作者"})
+                continue
+            
+            # 添加协作者
+            success = add_collaborator(db, document_id, owner_id, user_id, role)
+            if success:
+                results.append({"username": username, "success": True, "message": "添加成功"})
+            else:
+                results.append({"username": username, "success": False, "message": "添加失败"})
+                
+        except Exception as e:
+            logger.error(f"批量添加协作者 {username} 失败: {e}")
+            results.append({"username": username, "success": False, "message": "处理异常"})
+    
+    return results
+
+
+def remove_collaborator(db, document_id: int, owner_id: int, collaborator_user_id: int) -> bool:
+    """
+    移除文档协作者
+    
+    Args:
+        db: 数据库连接对象
+        document_id: 文档ID
+        owner_id: 文档所有者ID
+        collaborator_user_id: 协作者用户ID
+        
+    Returns:
+        是否移除成功
+    """
+    # 验证所有者权限
+    owner_rows = db.query(f"""
+        SELECT owner_id FROM {TABLE_DOCUMENTS} WHERE id = {document_id}
+    """)
+    
+    if not owner_rows or owner_rows[0][0] != owner_id:
+        return False
+    
+    try:
+        db.execute(f"""
+            DELETE FROM document_collaborators 
+            WHERE document_id = {document_id} AND user_id = {collaborator_user_id}
+        """)
+        logger.info(f"协作者 {collaborator_user_id} 已从文档 {document_id} 移除")
+        return True
+    except Exception as e:
+        logger.error(f"移除协作者失败: {e}")
+        return False
+
+
+def get_collaborators(db, document_id: int, user_id: int) -> list:
+    """
+    获取文档协作者列表
+    
+    Args:
+        db: 数据库连接对象
+        document_id: 文档ID
+        user_id: 当前用户ID（用于权限验证）
+        
+    Returns:
+        协作者列表 [{"user_id": int, "username": str, "role": str, "created_at": str}, ...]
+    """
+    # 检查权限（所有者或协作者）
+    permission = check_document_permission(db, document_id, user_id)
+    
+    if not permission["can_view"]:
+        return []
+    
+    try:
+        rows = db.query(f"""
+            SELECT u.id as user_id, u.username, dc.role, dc.created_at
+            FROM document_collaborators dc
+            INNER JOIN users u ON dc.user_id = u.id
+            WHERE dc.document_id = {document_id}
+            ORDER BY dc.created_at ASC
+        """)
+        
+        collaborators = []
+        for row in rows:
+            collaborators.append({
+                "user_id": row[0],
+                "username": row[1],
+                "role": row[2],
+                "created_at": row[3]
+            })
+        
+        return collaborators
+    except Exception as e:
+        logger.error(f"获取协作者列表失败: {e}")
+        return []
+
+
+def get_shared_documents(db, user_id: int, skip: int = 0, limit: int = 100) -> List[Dict]:
+    """
+    获取用户共享的文档列表
+    
+    Args:
+        db: 数据库连接对象
+        user_id: 用户ID
+        skip: 跳过的记录数
+        limit: 返回的最大记录数
+        
+    Returns:
+        文档字典列表
+    """
+    rows = db.query(f"""
+        SELECT d.id, d.owner_id, d.title, d.content, d.status, d.folder_name, d.tags, 
+               d.is_locked, d.locked_by, d.created_at, d.updated_at 
+        FROM {TABLE_DOCUMENTS} d
+        INNER JOIN document_collaborators dc ON d.id = dc.document_id
+        WHERE dc.user_id = {user_id}
+        ORDER BY d.updated_at DESC
+        LIMIT {limit} OFFSET {skip}
+    """)
+    
+    return [_row_to_document_dict(row) for row in rows]
+
+
 def create_document(db, document_data_or_schema, owner_id: int) -> Optional[Dict]:
     """
     创建新文档
@@ -348,11 +660,15 @@ def create_document(db, document_data_or_schema, owner_id: int) -> Optional[Dict
         folder_name = doc_data.get('folder_name')
         tags = doc_data.get('tags')
         
+        # 如果 folder_name 为 None 或空字符串，自动设置为 "默认文件夹"
+        if not folder_name or folder_name.strip() == '':
+            folder_name = "默认文件夹"
+        
         # 构造安全的 SQL 值
         title_safe = _escape(title)
         content_safe = _escape(content)
         status_safe = _escape(status)
-        folder_safe = _escape(folder_name) if folder_name is not None else "NULL"
+        folder_safe = _escape(folder_name)
         tags_safe = _escape(tags) if tags is not None else "NULL"
         now_sql = _format_datetime(now)
 

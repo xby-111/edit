@@ -27,6 +27,7 @@ def on_startup() -> None:
     init_db()
 
 
+# 添加CORS中间件
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.BACKEND_CORS_ORIGINS,
@@ -39,7 +40,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix=f"{settings.API_V1_STR}/auth", tags=["认证与登录"])
 app.include_router(users.router, prefix=settings.API_V1_STR, tags=["用户管理"])
 app.include_router(documents.router, prefix=settings.API_V1_STR, tags=["文档管理"])
-app.include_router(ws.router, prefix=settings.API_V1_STR, tags=["实时通信"])
+app.include_router(ws.router, tags=["实时通信"])  # 移除前缀，直接挂载到根级别
 
 # Mount static files and templates
 templates = Jinja2Templates(directory="templates")
@@ -57,7 +58,8 @@ async def read_index(request: Request) -> HTMLResponse:
     return templates.TemplateResponse("index.html", {"request": request})
 
 
-@app.get("/test", response_class=HTMLResponse)
+@app.get("/test_collab.html", response_class=HTMLResponse)
 async def read_test(request: Request) -> HTMLResponse:
     """Serve the testing page if present."""
     return templates.TemplateResponse("test_collab.html", {"request": request})
+

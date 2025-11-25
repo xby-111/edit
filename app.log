@@ -1,8 +1,0 @@
-INFO:     Will watch for changes in these directories: ['D:\\Projects\\edit']
-INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-INFO:     Started reloader process [27500] using WatchFiles
-INFO:     Started server process [23876]
-INFO:     Waiting for application startup.
-INFO:app.db.init_db:数据库连接成功: [(1,)]
-INFO:app.db.init_db:数据库表创建成功
-INFO:     Application startup complete.

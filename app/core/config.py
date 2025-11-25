@@ -25,6 +25,6 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = os.getenv("UPLOAD_DIR", "uploads")
     
     # CORS settings
-    BACKEND_CORS_ORIGINS: list[str] = ["http://localhost", "http://127.0.0.1", "http://localhost:3000", "http://127.0.0.1:3000"]  # Configure appropriately for production
+    BACKEND_CORS_ORIGINS: list[str] = ["http://localhost", "http://127.0.0.1", "http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:8000", "http://127.0.0.1:8000"]  # Configure appropriately for production
 
 settings = Settings()
