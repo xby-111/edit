@@ -11,7 +11,7 @@ from pathlib import Path
 
 from app.core.config import settings
 from app.db.init_db import init_db
-from app.api.routers import auth, users, documents, ws
+from app.api.routers import auth, users, documents, ws, notifications, notify_ws
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -83,6 +83,8 @@ app.include_router(auth.router, prefix=f"{settings.API_V1_STR}/auth", tags=["认
 app.include_router(users.router, prefix=settings.API_V1_STR, tags=["用户管理"])
 app.include_router(documents.router, prefix=settings.API_V1_STR, tags=["文档管理"])
 app.include_router(ws.router, tags=["实时通信"])  # 移除前缀，直接挂载到根级别
+app.include_router(notifications.router, tags=["通知"])
+app.include_router(notify_ws.router, tags=["通知实时通信"])
 
 # Mount static files and templates
 templates = Jinja2Templates(directory="templates")
