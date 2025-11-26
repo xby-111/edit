@@ -5,7 +5,7 @@ import logging
 import re
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import Response
 
 from app.core.security import get_current_user
@@ -46,6 +46,8 @@ from app.services.document_service import (
     check_document_permission,
     is_document_owner,
 )
+from app.services.audit_service import log_action
+from app.services.settings_service import is_feature_enabled
 from app.services.comment_service import create_comment, list_comments
 from app.services.task_service import create_task, list_tasks, update_task
 
@@ -262,10 +264,14 @@ async def unlock_document_endpoint(
 async def export_document_endpoint(
     document_id: int,
     format: str = "html",
-    current_user = Depends(get_current_user), 
-    db = Depends(get_db)
+    current_user = Depends(get_current_user),
+    db = Depends(get_db),
+    request: Request = None,
 ):
     """导出文档"""
+    if not is_feature_enabled(db, "feature.export.enabled", True):
+        raise HTTPException(status_code=403, detail="导出功能已禁用")
+
     # 先检查文档是否存在且用户有权限
     document = get_document(db, document_id, current_user.id)
     if not document:
@@ -278,12 +284,30 @@ async def export_document_endpoint(
         if format.lower() == 'markdown':
             # 简单的 HTML 到 Markdown 转换
             markdown_content = htmlToMarkdown(content)
+            log_action(
+                db,
+                user_id=current_user.id,
+                action="export.request",
+                resource_type="document",
+                resource_id=document_id,
+                request=request,
+                meta={"format": "markdown"},
+            )
             return Response(
                 content=markdown_content,
                 media_type="text/markdown",
                 headers={"Content-Disposition": f"attachment; filename={title}.md"}
             )
         elif format.lower() == 'html':
+            log_action(
+                db,
+                user_id=current_user.id,
+                action="export.request",
+                resource_type="document",
+                resource_id=document_id,
+                request=request,
+                meta={"format": "html"},
+            )
             return Response(
                 content=content,
                 media_type="text/html",
@@ -351,12 +375,25 @@ async def import_document_endpoint(
 @router.post("/documents", response_model=Document, status_code=status.HTTP_201_CREATED, summary="创建文档", description="创建新的协作文档")
 async def create_document_endpoint(
     document: DocumentCreate,
-    current_user = Depends(get_current_user), 
-    db = Depends(get_db)
+    current_user = Depends(get_current_user),
+    db = Depends(get_db),
+    request: Request = None,
 ):
     """创建文档"""
     try:
         new_document = create_document(db, document, current_user.id)
+        try:
+            log_action(
+                db,
+                user_id=current_user.id,
+                action="document.create",
+                resource_type="document",
+                resource_id=new_document.get("id"),
+                request=request,
+            )
+        except Exception:
+            pass
+
         return Document(
             id=new_document['id'],
             owner_id=new_document['owner_id'],
@@ -698,6 +735,7 @@ async def create_document_comment(
     comment_in: CommentCreate,
     current_user=Depends(get_current_user),
     db=Depends(get_db),
+    request: Request = None,
 ):
     # 先校验文档存在且用户有权限
     from app.services.document_service import check_document_permission
@@ -706,7 +744,7 @@ async def create_document_comment(
         raise HTTPException(status_code=403, detail="文档不存在或无权访问")
         
     try:
-        return create_comment(
+        comment = create_comment(
             db,
             document_id,
             current_user.id,
@@ -716,6 +754,19 @@ async def create_document_comment(
             None,
             None,
         )
+        try:
+            log_action(
+                db,
+                user_id=current_user.id,
+                action="comment.create",
+                resource_type="document",
+                resource_id=document_id,
+                request=request,
+                meta={"comment_id": getattr(comment, 'id', None) if hasattr(comment, 'id') else comment.get("id") if isinstance(comment, dict) else None},
+            )
+        except Exception:
+            pass
+        return comment
     except Exception as e:
         logger.error("创建评论失败: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail="创建评论失败")
@@ -742,6 +793,7 @@ async def create_document_task(
     task_in: TaskCreate,
     current_user=Depends(get_current_user),
     db=Depends(get_db),
+    request: Request = None,
 ):
     # 先校验文档存在且用户有权限（需要编辑权限才能创建任务）
     from app.services.document_service import check_document_permission
@@ -761,6 +813,18 @@ async def create_document_task(
             assignee_id,
             due,
         )
+        try:
+            log_action(
+                db,
+                user_id=current_user.id,
+                action="task.create",
+                resource_type="document",
+                resource_id=document_id,
+                request=request,
+                meta={"task_id": task.get("id") if isinstance(task, dict) else getattr(task, "id", None)},
+            )
+        except Exception:
+            pass
         try:
             if task.get("assignee_id"):
                 from app.services.notification_service import create_notification

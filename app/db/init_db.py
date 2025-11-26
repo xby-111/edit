@@ -33,7 +33,7 @@ def init_db():
                 phone VARCHAR(20) UNIQUE,
                 hashed_password VARCHAR(255) NOT NULL,
                 is_active BOOLEAN NOT NULL DEFAULT TRUE,
-                role VARCHAR(20) NOT NULL DEFAULT 'viewer',
+                role VARCHAR(20) NOT NULL DEFAULT 'user',
                 avatar_url VARCHAR(500),
                 full_name VARCHAR(100),
                 bio TEXT,
@@ -45,7 +45,7 @@ def init_db():
                 verification_code_expires TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                CONSTRAINT ck_users_role CHECK (role IN ('admin','editor','viewer')),
+                CONSTRAINT ck_users_role CHECK (role IN ('admin','user')),
                 CONSTRAINT ck_users_is_active CHECK (is_active IN (TRUE, FALSE))
             )
         """)

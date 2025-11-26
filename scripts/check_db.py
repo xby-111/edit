@@ -186,14 +186,231 @@ def check_and_create_notifications_table():
 
     return True
 
+
+def check_and_add_user_role_column():
+    """为 users 表添加 role 列（幂等）。"""
+    conn = get_db_connection()
+
+    try:
+        result = conn.query(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = 'users' AND column_name = 'role'
+            """
+        )
+
+        if not result:
+            print("users 表缺少 role 列，开始添加...")
+            conn.execute("""
+                ALTER TABLE users
+                ADD COLUMN role TEXT NOT NULL DEFAULT 'user'
+            """)
+            print("✅ 已添加 role 列并设置默认值")
+        else:
+            print("✅ users 表已包含 role 列，无需添加")
+
+        # 回填历史数据为默认值（避免 NULL）
+        conn.execute("""
+            UPDATE users
+            SET role = 'user'
+            WHERE role IS NULL OR role = '' OR role NOT IN ('admin', 'user')
+        """)
+
+        # 更新默认值和检查约束
+        try:
+            conn.execute("ALTER TABLE users ALTER COLUMN role SET DEFAULT 'user'")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE users DROP CONSTRAINT IF EXISTS ck_users_role")
+            conn.execute("ALTER TABLE users ADD CONSTRAINT ck_users_role CHECK (role IN ('admin','user'))")
+        except Exception as e:
+            print(f"⚠️ 更新 role 检查约束失败: {e}")
+
+        # 创建索引（如果不存在）
+        index_result = conn.query(
+            """
+            SELECT indexname FROM pg_indexes
+            WHERE tablename = 'users' AND indexname = 'idx_users_role'
+            """
+        )
+        if not index_result:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)")
+            print("✅ 已创建 idx_users_role 索引")
+        else:
+            print("✅ idx_users_role 索引已存在")
+
+    except Exception as e:
+        print(f"❌ 添加 role 列时出错: {e}")
+        return False
+
+    return True
+
+
+def check_and_create_audit_logs_table():
+    """检查并创建 audit_logs 表（幂等）。"""
+    conn = get_db_connection()
+
+    try:
+        table_result = conn.query(
+            """
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_name = 'audit_logs'
+            """
+        )
+
+        if not table_result:
+            print("audit_logs 表不存在，开始创建...")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS audit_logs (
+                    id BIGSERIAL PRIMARY KEY,
+                    user_id BIGINT NULL,
+                    action TEXT NOT NULL,
+                    resource_type TEXT NULL,
+                    resource_id BIGINT NULL,
+                    ip TEXT NULL,
+                    user_agent TEXT NULL,
+                    meta_json TEXT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT now()
+                )
+                """
+            )
+            print("✅ audit_logs 表已创建")
+        else:
+            print("✅ audit_logs 表已存在")
+
+        indexes = {
+            "idx_audit_logs_user_created": "CREATE INDEX idx_audit_logs_user_created ON audit_logs (user_id, created_at)",
+            "idx_audit_logs_action_created": "CREATE INDEX idx_audit_logs_action_created ON audit_logs (action, created_at)",
+            "idx_audit_logs_resource": "CREATE INDEX idx_audit_logs_resource ON audit_logs (resource_type, resource_id)",
+        }
+
+        for index_name, create_sql in indexes.items():
+            index_result = conn.query(
+                """
+                SELECT indexname FROM pg_indexes
+                WHERE tablename = 'audit_logs' AND indexname = %s
+                """,
+                (index_name,),
+            )
+            if not index_result:
+                conn.execute(create_sql)
+                print(f"✅ 已创建索引 {index_name}")
+            else:
+                print(f"✅ 索引 {index_name} 已存在")
+
+    except Exception as e:
+        print(f"❌ 检查 audit_logs 表时出错: {e}")
+        return False
+
+    return True
+
+
+def check_and_create_user_feedback_table():
+    """检查并创建 user_feedback 表（幂等）。"""
+    conn = get_db_connection()
+
+    try:
+        table_result = conn.query(
+            """
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_name = 'user_feedback'
+            """
+        )
+
+        if not table_result:
+            print("user_feedback 表不存在，开始创建...")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_feedback (
+                    id BIGSERIAL PRIMARY KEY,
+                    user_id BIGINT NULL,
+                    rating INT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT now()
+                )
+                """
+            )
+            print("✅ user_feedback 表已创建")
+        else:
+            print("✅ user_feedback 表已存在")
+
+        indexes = {
+            "idx_user_feedback_created": "CREATE INDEX idx_user_feedback_created ON user_feedback (created_at)",
+            "idx_user_feedback_user_created": "CREATE INDEX idx_user_feedback_user_created ON user_feedback (user_id, created_at)",
+        }
+
+        for index_name, create_sql in indexes.items():
+            index_result = conn.query(
+                """
+                SELECT indexname FROM pg_indexes
+                WHERE tablename = 'user_feedback' AND indexname = %s
+                """,
+                (index_name,),
+            )
+            if not index_result:
+                conn.execute(create_sql)
+                print(f"✅ 已创建索引 {index_name}")
+            else:
+                print(f"✅ 索引 {index_name} 已存在")
+
+    except Exception as e:
+        print(f"❌ 检查 user_feedback 表时出错: {e}")
+        return False
+
+    return True
+
+
+def check_and_create_system_settings_table():
+    """检查并创建 system_settings 表（幂等）。"""
+    conn = get_db_connection()
+
+    try:
+        table_result = conn.query(
+            """
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_name = 'system_settings'
+            """
+        )
+
+        if not table_result:
+            print("system_settings 表不存在，开始创建...")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS system_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TIMESTAMP NOT NULL DEFAULT now()
+                )
+                """
+            )
+            print("✅ system_settings 表已创建")
+        else:
+            print("✅ system_settings 表已存在")
+
+    except Exception as e:
+        print(f"❌ 检查 system_settings 表时出错: {e}")
+        return False
+
+    return True
+
 def main():
     print("🔍 开始检查数据库表结构...")
 
     success1 = check_and_fix_comments_table()
     success2 = check_and_create_collaborators_table()
     success3 = check_and_create_notifications_table()
+    success4 = check_and_add_user_role_column()
+    success5 = check_and_create_audit_logs_table()
+    success6 = check_and_create_user_feedback_table()
+    success7 = check_and_create_system_settings_table()
 
-    if success1 and success2 and success3:
+    if success1 and success2 and success3 and success4 and success5 and success6 and success7:
         print("🎉 数据库自检完成")
     else:
         print("💥 数据库自检失败")

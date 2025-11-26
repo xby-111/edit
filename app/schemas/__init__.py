@@ -9,7 +9,7 @@ class UserBase(BaseModel):
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
     is_active: Optional[bool] = True
-    role: Literal['admin', 'editor', 'viewer'] | None = "viewer"
+    role: Literal['admin', 'user'] | None = "user"
 
 class UserCreate(UserBase):
     password: str
@@ -26,7 +26,7 @@ class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
     is_active: Optional[bool] = None
-    role: Literal['admin', 'editor', 'viewer'] | None = None
+    role: Literal['admin', 'user'] | None = None
     full_name: Optional[str] = None
     bio: Optional[str] = None
     address: Optional[str] = None

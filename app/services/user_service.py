@@ -180,7 +180,7 @@ def create_user(db, user: UserCreate):
     # 使用参数化查询插入用户数据
     phone_value = getattr(user, 'phone', None)
     is_active = user.is_active if user.is_active is not None else True
-    role = user.role if user.role else "viewer"
+    role = user.role if user.role else "user"
     
     # 使用参数化查询，兼容层会处理占位符转换
     db.execute("""
