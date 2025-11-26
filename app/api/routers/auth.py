@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from typing import List
 from app.core.security import create_access_token, verify_password, get_password_hash, get_current_user
 from app.db.session import get_db
@@ -8,6 +8,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from datetime import timedelta
 from app.core.config import settings
 import logging
+from app.services.audit_service import log_action
 
 def _escape(value: str) -> str:
     """SQL字符串字面量转义"""
@@ -76,7 +77,7 @@ def register(user: UserCreate, db = Depends(get_db)):
         )
 
 @router.post("/token", response_model=Token, summary="用户登录", description="验证用户身份并返回访问令牌")
-async def login(form_data: OAuth2PasswordRequestForm = Depends(), db = Depends(get_db)):
+async def login(form_data: OAuth2PasswordRequestForm = Depends(), db = Depends(get_db), request: Request = None):
     # 使用参数化查询，兼容层会处理占位符转换
     rows = db.query("SELECT id, username, hashed_password FROM users WHERE username = %s LIMIT 1", (form_data.username,))
     
@@ -105,6 +106,18 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db = Depends(g
     access_token = create_access_token(
         data={"sub": user['username']}, expires_delta=access_token_expires
     )
+    try:
+        log_action(
+            db,
+            user_id=user.get("id"),
+            action="auth.login",
+            resource_type=None,
+            resource_id=None,
+            request=request,
+        )
+    except Exception:
+        pass
+
     return {"access_token": access_token, "token_type": "bearer"}
 
 @router.get("/me", response_model=UserSchema, summary="获取当前用户信息", description="获取当前登录用户的详细信息")
