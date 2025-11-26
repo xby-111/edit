@@ -1,0 +1,9 @@
+🔍 开始检查数据库表结构...
+✅ comments 表已包含 updated_at 列，无需修复
+✅ 所有记录的 updated_at 都已正确设置
+✅ document_collaborators 表已存在，无需创建
+✅ notifications 表已存在
+✅ 索引 idx_notifications_user_created 已存在
+✅ 索引 idx_notifications_user_unread 已存在
+✅ 索引 idx_notifications_user_type 已存在
+🎉 数据库自检完成

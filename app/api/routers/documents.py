@@ -764,7 +764,8 @@ async def create_document_task(
         try:
             if task.get("assignee_id"):
                 from app.services.notification_service import create_notification
-                create_notification(
+                from app.services.notification_ws_manager import notification_ws_manager
+                notification = create_notification(
                     db,
                     user_id=task["assignee_id"],
                     type="task",
@@ -772,6 +773,13 @@ async def create_document_task(
                     content=task_in.title,
                     payload={"task_id": task.get("id"), "document_id": document_id},
                 )
+                # 确保WebSocket推送（在异步上下文中）
+                if notification:
+                    import asyncio
+                    try:
+                        asyncio.create_task(notification_ws_manager.async_send_notification(task["assignee_id"], notification))
+                    except Exception as ws_err:
+                        logger.warning("WebSocket推送失败: %s", ws_err)
         except Exception as notify_err:
             logger.warning("创建任务通知失败: %s", notify_err)
         return task

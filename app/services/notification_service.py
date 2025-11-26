@@ -18,6 +18,7 @@ def _row_to_notification(row) -> Dict:
         "payload": json.loads(row[5]) if row[5] else None,
         "is_read": row[6],
         "created_at": row[7],
+        "updated_at": row[8] if len(row) > 8 else row[7],  # 兼容没有updated_at的情况
     }
 
 
@@ -30,23 +31,51 @@ def create_notification(
     payload: Optional[dict] = None,
 ) -> Optional[Dict]:
     payload_str = json.dumps(payload) if payload is not None else None
-    rows = db.query(
+    # openGauss可能不支持RETURNING，使用INSERT后查询的方式
+    db.execute(
         """
         INSERT INTO notifications (user_id, type, title, content, payload)
         VALUES (%s, %s, %s, %s, %s)
-        RETURNING id, user_id, type, title, content, payload, is_read, created_at
         """,
         (user_id, type, title, content, payload_str),
+    )
+    
+    # 查询刚插入的通知（按id DESC取最新一条，更精确）
+    rows = db.query(
+        """
+        SELECT id, user_id, type, title, content, payload, is_read, created_at, COALESCE(updated_at, created_at) as updated_at
+        FROM notifications
+        WHERE user_id = %s
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (user_id,),
     )
     notification = _row_to_notification(rows[0]) if rows else None
 
     if notification and user_id:
+        # 异步推送通知到WebSocket
+        # 尝试获取当前运行的事件循环
         try:
-            notification_ws_manager.send_notification(user_id, notification)
-        except RuntimeError:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
+            # 如果事件循环正在运行，创建任务
             loop.create_task(notification_ws_manager.async_send_notification(user_id, notification))
-        except Exception as e:  # pragma: no cover - best effort logging
+        except RuntimeError:
+            # 如果没有运行的事件循环，尝试获取或创建
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(notification_ws_manager.async_send_notification(user_id, notification))
+                else:
+                    # 事件循环未运行，使用同步方法（不太可能，但保险）
+                    notification_ws_manager.send_notification(user_id, notification)
+            except Exception:
+                # 最后fallback到同步方法
+                try:
+                    notification_ws_manager.send_notification(user_id, notification)
+                except Exception as e:
+                    logger.warning("推送通知到WebSocket失败: %s", e)
+        except Exception as e:
             logger.warning("推送通知到WebSocket失败: %s", e)
 
     return notification
@@ -68,8 +97,10 @@ def list_notifications(
         params.append(notif_type)
 
     if unread is not None:
+        # unread=True 表示查询未读（is_read=False）
+        # unread=False 表示查询已读（is_read=True）
         filters.append("is_read = %s")
-        params.append(unread)
+        params.append(not unread)  # 取反：unread=True -> is_read=False, unread=False -> is_read=True
 
     where_clause = " AND ".join(filters)
     count_rows = db.query(
@@ -82,7 +113,7 @@ def list_notifications(
     params_with_paging = params + [page_size, offset]
     rows = db.query(
         f"""
-        SELECT id, user_id, type, title, content, payload, is_read, created_at
+        SELECT id, user_id, type, title, content, payload, is_read, created_at, COALESCE(updated_at, created_at) as updated_at
         FROM notifications
         WHERE {where_clause}
         ORDER BY created_at DESC
@@ -102,7 +133,7 @@ def list_notifications(
 def get_notification(db, notification_id: int, user_id: int) -> Optional[Dict]:
     rows = db.query(
         """
-        SELECT id, user_id, type, title, content, payload, is_read, created_at
+        SELECT id, user_id, type, title, content, payload, is_read, created_at, COALESCE(updated_at, created_at) as updated_at
         FROM notifications
         WHERE id = %s AND user_id = %s
         LIMIT 1
@@ -113,13 +144,14 @@ def get_notification(db, notification_id: int, user_id: int) -> Optional[Dict]:
 
 
 def mark_notification_read(db, notification_id: int, user_id: int) -> Optional[Dict]:
+    from datetime import datetime
     db.execute(
         """
         UPDATE notifications
-        SET is_read = TRUE
+        SET is_read = TRUE, updated_at = %s
         WHERE id = %s AND user_id = %s
         """,
-        (notification_id, user_id),
+        (datetime.utcnow(), notification_id, user_id),
     )
     return get_notification(db, notification_id, user_id)
 

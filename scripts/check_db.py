@@ -121,6 +121,11 @@ def check_and_create_collaborators_table():
     return True
 
 
+def _sql_literal(s: str) -> str:
+    """SQL字符串字面量转义"""
+    return "'" + s.replace("'", "''") + "'"
+
+
 def check_and_create_notifications_table():
     """检查并创建 notifications 表和索引"""
     conn = get_db_connection()
@@ -161,12 +166,13 @@ def check_and_create_notifications_table():
         }
 
         for index_name, create_sql in indexes.items():
+            # 使用参数化查询，兼容层会处理占位符转换
             index_result = conn.query(
                 """
                 SELECT indexname FROM pg_indexes
                 WHERE tablename = 'notifications' AND indexname = %s
                 """,
-                (index_name,),
+                (index_name,)
             )
             if not index_result:
                 conn.execute(create_sql)

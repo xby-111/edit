@@ -20,7 +20,7 @@ router = APIRouter(prefix=settings.API_V1_STR, tags=["通知"])
 
 @router.get("/notifications", response_model=NotificationListResponse)
 async def get_notifications(
-    notif_type: Optional[str] = Query(None),
+    notif_type: Optional[str] = Query(None, alias="type"),  # 支持type和notif_type两种参数名
     unread: Optional[bool] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),

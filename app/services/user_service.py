@@ -62,9 +62,9 @@ _UPDATABLE_USER_FIELDS = {
     'avatar_url', 'phone_secondary', 'is_active', 'role'
 }
 
-def get_user(db, user_id: int):
+def get_user_by_id(db, user_id: int):
     """获取用户 - 使用 py-opengauss 的 query 方法"""
-    # 使用 py-opengauss 的 query 方法查询
+    # 使用参数化查询，兼容层会处理占位符转换
     rows = db.query("SELECT id, username, email, phone, is_active, role, avatar_url, full_name, bio, address, phone_secondary, created_at, updated_at FROM users WHERE id = %s LIMIT 1", (user_id,))
     
     if rows:
@@ -88,7 +88,7 @@ def get_user(db, user_id: int):
 
 def get_user_by_username(db, username: str):
     """通过用户名获取用户 - 使用 py-opengauss 的 query 方法"""
-    # 使用 py-opengauss 的 query 方法查询
+    # 使用参数化查询，兼容层会处理占位符转换
     rows = db.query("SELECT id, username, email, phone, is_active, role, hashed_password, created_at, updated_at FROM users WHERE username = %s LIMIT 1", (username,))
     
     if rows:
@@ -108,7 +108,7 @@ def get_user_by_username(db, username: str):
 
 def get_user_by_email(db, email: str):
     """通过邮箱获取用户 - 使用 py-opengauss 的 query 方法"""
-    # 使用 py-opengauss 的 query 方法查询
+    # 使用参数化查询，兼容层会处理占位符转换
     rows = db.query("SELECT id, username, email, phone, is_active, role, created_at, updated_at FROM users WHERE email = %s LIMIT 1", (email,))
     
     if rows:
@@ -127,7 +127,7 @@ def get_user_by_email(db, email: str):
 
 def get_user_by_phone(db, phone: str):
     """通过手机号获取用户 - 使用 py-opengauss 的 query 方法"""
-    # 使用 py-opengauss 的 query 方法查询
+    # 使用参数化查询，兼容层会处理占位符转换
     rows = db.query("SELECT id, username, email, phone, is_active, role, created_at, updated_at FROM users WHERE phone = %s LIMIT 1", (phone,))
     
     if rows:
@@ -146,7 +146,7 @@ def get_user_by_phone(db, phone: str):
 
 def get_users(db, skip: int = 0, limit: int = 100):
     """获取用户列表 - 使用 py-opengauss 的 query 方法"""
-    # 使用 py-opengauss 的 query 方法查询
+    # 使用参数化查询，兼容层会处理占位符转换
     rows = db.query("SELECT id, username, email, phone, is_active, role, created_at, updated_at FROM users ORDER BY id LIMIT %s OFFSET %s", (limit, skip))
     
     users = []
@@ -182,13 +182,14 @@ def create_user(db, user: UserCreate):
     is_active = user.is_active if user.is_active is not None else True
     role = user.role if user.role else "viewer"
     
+    # 使用参数化查询，兼容层会处理占位符转换
     db.execute("""
         INSERT INTO users (username, email, phone, hashed_password, is_active, role, created_at, updated_at) 
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
     """, (user.username, user.email, phone_value, hashed_password, is_active, role, now, now))
     
     # 获取刚插入的用户数据
-    rows = db.query("SELECT id, username, email, phone, is_active, role, created_at, updated_at FROM users WHERE username = %s ORDER BY id DESC LIMIT 1", (username,))
+    rows = db.query("SELECT id, username, email, phone, is_active, role, created_at, updated_at FROM users WHERE username = %s ORDER BY id DESC LIMIT 1", (user.username,))
     
     if rows:
         result = rows[0]
@@ -343,6 +344,10 @@ def update_user_profile(db, user_id: int, profile_update):
     
     # 返回更新后的用户数据
     return get_user(db, user_id)
+
+def get_user(db, user_id: int):
+    """获取用户 - get_user_by_id的别名"""
+    return get_user_by_id(db, user_id)
 
 def get_user_profile(db, user_id: int):
     """获取用户完整个人资料"""

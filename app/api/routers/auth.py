@@ -9,6 +9,13 @@ from datetime import timedelta
 from app.core.config import settings
 import logging
 
+def _escape(value: str) -> str:
+    """SQL字符串字面量转义"""
+    if value is None:
+        return "NULL"
+    escaped_value = value.replace("'", "''")
+    return f"'{escaped_value}'"
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["认证与登录"])
@@ -70,7 +77,7 @@ def register(user: UserCreate, db = Depends(get_db)):
 
 @router.post("/token", response_model=Token, summary="用户登录", description="验证用户身份并返回访问令牌")
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db = Depends(get_db)):
-    # 使用 user_service 中的函数获取用户信息，适配 py-opengauss API
+    # 使用参数化查询，兼容层会处理占位符转换
     rows = db.query("SELECT id, username, hashed_password FROM users WHERE username = %s LIMIT 1", (form_data.username,))
     
     if not rows:

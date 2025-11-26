@@ -13,6 +13,7 @@ class Notification(BaseModel):
     payload: Optional[dict] = None
     is_read: bool = False
     created_at: datetime
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

@@ -264,9 +264,18 @@ def init_db():
                 content TEXT NULL,
                 payload TEXT NULL,
                 is_read BOOLEAN NOT NULL DEFAULT FALSE,
-                created_at TIMESTAMP NOT NULL DEFAULT now()
+                created_at TIMESTAMP NOT NULL DEFAULT now(),
+                updated_at TIMESTAMP NULL
             )
         """)
+        # 如果表已存在但没有updated_at字段，添加它
+        try:
+            conn.execute("""
+                ALTER TABLE notifications ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NULL
+            """)
+        except Exception:
+            # 如果ALTER失败（可能字段已存在），忽略
+            pass
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications (user_id, created_at DESC)
         """)
