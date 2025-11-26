@@ -22,7 +22,7 @@ class ConnectionManager:
         self.active_connections: Dict[int, list] = {}  # doc_id -> list of conn
 
     async def connect(self, websocket: WebSocket, document_id: int, user_id: int, initial_content: str):
-        await websocket.accept()
+        # 注意：WebSocket 应该在路由层已经 accept，这里不再重复 accept
         if document_id not in self.active_connections:
             self.active_connections[document_id] = []
 
@@ -74,25 +74,46 @@ class ConnectionManager:
 
     async def handle_message(self, document_id: int, user_id: int, data: dict, sender_ws: WebSocket, db):
         """处理来自客户端的消息"""
-        if data["type"] == "content":
-            # 更新文档内容到数据库 - 使用 py-opengauss 的 execute 方法
-            now = datetime.utcnow()
-            content_safe = _escape(data["content"])
-            now_sql = _format_datetime(now)
-            db.execute(f"UPDATE documents SET content = {content_safe}, updated_at = {now_sql} WHERE id = {document_id}")
-            
-            # 广播内容更新给其他用户
-            await self.broadcast_to_room(document_id, {
-                "type": "content",
-                "content": data["content"],
-                "user_id": user_id
-            }, user_id, sender_ws)
-            
-        elif data["type"] == "cursor":
+        msg_type = data.get("type")
+        
+        # 协议兼容：支持 content 和 content_update 两种消息类型
+        content = None
+        if msg_type == "content":
+            content = data.get("content", "")
+        elif msg_type == "content_update":
+            # 优先读取 payload.html，fallback 到 content
+            payload = data.get("payload", {})
+            content = payload.get("html") or data.get("content", "")
+        elif msg_type == "cursor":
             # 广播光标位置给其他用户
             await self.broadcast_to_room(document_id, {
                 "type": "cursor",
                 "user_id": user_id,
-                "cursor": data["cursor"],
+                "cursor": data.get("cursor"),
                 "color": self.get_user_color(user_id)
             }, user_id, sender_ws)
+            return
+        else:
+            # 未知消息类型安全忽略，不抛异常
+            return
+        
+        # 更新文档内容到数据库 - 使用参数化查询避免SQL注入
+        if content is not None:
+            now = datetime.utcnow()
+            # 使用参数化查询，直接传datetime对象
+            db.execute("UPDATE documents SET content = %s, updated_at = %s WHERE id = %s", 
+                      (content, now, document_id))
+            
+            # 广播内容更新给其他用户，保持协议兼容性
+            broadcast_data = {
+                "type": msg_type,  # 保持原始消息类型
+                "user_id": user_id
+            }
+            
+            # 根据消息类型调整广播格式
+            if msg_type == "content_update":
+                broadcast_data["payload"] = {"html": content}
+            else:
+                broadcast_data["content"] = content
+                
+            await self.broadcast_to_room(document_id, broadcast_data, user_id, sender_ws)

@@ -359,8 +359,17 @@
                 document.getElementById('editing-tip').textContent = '你正在编辑文档';
             };
 
-            socket.onerror = () => updateStatus('连接出错');
-            socket.onclose = () => updateStatus('连接已关闭');
+            socket.onerror = (e) => {
+                console.error('WebSocket错误:', e);
+                updateStatus('连接出错');
+            };
+            
+            socket.onclose = (e) => {
+                console.log('WebSocket关闭:', e.code, e.reason);
+                updateStatus('连接已关闭');
+                // 清理socket引用
+                socket = null;
+            };
 
             socket.onmessage = (event) => {
                 const msg = JSON.parse(event.data || '{}');
@@ -680,6 +689,18 @@
                 alert('移除协作者失败，请检查网络连接');
             }
         }
+
+        // 页面关闭时清理WebSocket连接
+        window.addEventListener('beforeunload', function() {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                // 发送关闭消息（可选）
+                try {
+                    socket.close(1000, 'Page closing');
+                } catch (e) {
+                    console.error('关闭WebSocket时出错:', e);
+                }
+            }
+        });
 
         document.addEventListener('DOMContentLoaded', function() {
             initQuillEditor();

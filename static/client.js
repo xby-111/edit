@@ -286,21 +286,50 @@ async function loadDocuments(folder = null) {
             api.getSharedDocuments()
         ]);
         
-        // 合并显示拥有的文档和共享的文档
-        const allDocuments = [
-            ...ownedDocuments.map(doc => ({ ...doc, is_shared: false })),
-            ...sharedDocuments.map(doc => ({ ...doc, is_shared: true }))
-        ];
-        
-        // 按更新时间排序
-        allDocuments.sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
-        
-        renderDocumentList(allDocuments);
+        // 分别显示我的文档和共享文档
+        renderDocumentList(ownedDocuments.map(doc => ({ ...doc, is_shared: false })));
+        renderSharedDocumentList(sharedDocuments.map(doc => ({ ...doc, is_shared: true })));
     } catch (error) {
         console.error('加载文档列表失败:', error);
         showError('document-error', '加载文档列表失败: ' + error.message);
     }
 }
+
+// 渲染共享文档列表
+const renderSharedDocumentList = (documents) => {
+    const sharedDocumentList = document.getElementById('shared-document-list');
+    const noSharedDocuments = document.getElementById('no-shared-documents');
+
+    if (!sharedDocumentList || !noSharedDocuments) return;
+
+    if (documents.length === 0) {
+        sharedDocumentList.innerHTML = '';
+        noSharedDocuments.style.display = 'block';
+    } else {
+        noSharedDocuments.style.display = 'none';
+        sharedDocumentList.innerHTML = documents.map(doc => {
+            const tags = doc.tags ? doc.tags.split(',').map(tag => `<span class="tag">${tag.trim()}</span>`).join('') : '';
+            const lockStatus = doc.is_locked ? '<span style="color: #f44336;">🔒 已锁定</span>' : '';
+            const sharedBadge = '<span style="background-color: #4CAF50; color: white; padding: 2px 6px; border-radius: 3px; font-size: 12px; margin-left: 5px;">共享</span>';
+            const ownerInfo = `<p style="font-size: 12px; color: #666;">所有者ID: ${doc.owner_id}</p>`;
+            
+            return `
+                <div class="document-item">
+                    <div class="document-info">
+                        <h3>${doc.title} ${lockStatus} ${sharedBadge}</h3>
+                        <p>文件夹: ${doc.folder_name || '未分类'} | 标签: ${tags || '无'}</p>
+                        <p>创建时间: ${formatDate(doc.created_at)} | 更新时间: ${formatDate(doc.updated_at)}</p>
+                        ${ownerInfo}
+                    </div>
+                    <div class="document-actions">
+                        <button class="btn-small btn-primary" onclick="openDocument(${doc.id})" ${doc.is_locked ? 'disabled' : ''}>打开协同编辑</button>
+                        <button class="btn-small btn-info" onclick="exportDocument(${doc.id})">导出</button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+};
 
 const renderDocumentList = (documents) => {
     const documentList = document.getElementById('document-list');

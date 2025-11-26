@@ -94,14 +94,15 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db = Depends(get
                 headers={"WWW-Authenticate": "Bearer"},
             )
     
-    # Query user from database - 使用 py-opengauss 的 query 方法
-    from app.services.user_service import _escape
-    
-    username_safe = _escape(username)
-    rows = db.query(f"SELECT id, username, email, phone, is_active, role, full_name, bio, avatar_url, created_at, updated_at FROM users WHERE username = {username_safe} LIMIT 1")
+    # Query user from database - 使用参数化查询避免SQL注入
+    rows = db.query("SELECT id, username, email, phone, is_active, role, full_name, bio, avatar_url, created_at, updated_at FROM users WHERE username = %s LIMIT 1", (username,))
     
     if not rows:
-        raise credentials_exception
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     
     result = rows[0]  # 取第一行
     

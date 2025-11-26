@@ -1,6 +1,7 @@
 """FastAPI application entry point."""
 from __future__ import annotations
 
+import asyncio
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
@@ -20,11 +21,52 @@ app = FastAPI(
     redoc_url="/api/redoc",
 )
 
+# 后台任务句柄，避免重复创建
+_ws_cleanup_task = None
+_ws_heartbeat_task = None
+
 
 @app.on_event("startup")
-def on_startup() -> None:
+async def on_startup() -> None:
     """Initialize the database before serving requests."""
+    global _ws_cleanup_task, _ws_heartbeat_task
+    
     init_db()
+    
+    # 启动WebSocket死连接清理任务和心跳任务（避免重复创建）
+    if _ws_cleanup_task is None or _ws_cleanup_task.done():
+        _ws_cleanup_task = asyncio.create_task(ws.cleanup_task())
+        print("WebSocket 清理任务已启动")
+    
+    if _ws_heartbeat_task is None or _ws_heartbeat_task.done():
+        _ws_heartbeat_task = asyncio.create_task(ws.heartbeat_task())
+        print("WebSocket 心跳任务已启动")
+
+
+@app.on_event("shutdown")
+async def on_shutdown() -> None:
+    """优雅关闭后台任务"""
+    global _ws_cleanup_task, _ws_heartbeat_task
+    
+    print("正在关闭后台任务...")
+    
+    # 取消并等待清理任务结束
+    if _ws_cleanup_task and not _ws_cleanup_task.done():
+        _ws_cleanup_task.cancel()
+        try:
+            await _ws_cleanup_task
+        except asyncio.CancelledError:
+            print("WebSocket 清理任务已取消")
+    
+    # 取消并等待心跳任务结束
+    if _ws_heartbeat_task and not _ws_heartbeat_task.done():
+        _ws_heartbeat_task.cancel()
+        try:
+            await _ws_heartbeat_task
+        except asyncio.CancelledError:
+            print("WebSocket 心跳任务已取消")
+    
+    print("后台任务已全部关闭")
 
 
 # 添加CORS中间件

@@ -188,12 +188,15 @@ def _get_template_by_id(db, template_id: int, active_only: bool = True) -> Optio
     Returns:
         模板字典，如果不存在则返回 None
     """
-    where_clause = f"WHERE id = {template_id}"
+    # 使用参数化查询避免SQL注入
+    params = [template_id]
+    where_clause = "WHERE id = %s"
     if active_only:
         where_clause += " AND is_active = TRUE"
     
     rows = db.query(
-        f"SELECT {TEMPLATE_FIELDS} FROM {TABLE_DOCUMENT_TEMPLATES} {where_clause} LIMIT 1"
+        f"SELECT {TEMPLATE_FIELDS} FROM {TABLE_DOCUMENT_TEMPLATES} {where_clause} LIMIT 1",
+        tuple(params)
     )
     if rows:
         return _row_to_template_dict(rows[0])
@@ -361,6 +364,18 @@ def check_document_permission(db, document_id: int, user_id: int) -> Dict[str, b
     Returns:
         权限字典: {"can_view": bool, "can_edit": bool, "is_owner": bool}
     """
+    # 匿名用户（user_id=0）允许查看，但不允许编辑
+    if user_id == 0:
+        # 检查文档是否存在
+        owner_rows = db.query(f"""
+            SELECT owner_id FROM {TABLE_DOCUMENTS} WHERE id = {document_id}
+        """)
+        if owner_rows:
+            return {"can_view": True, "can_edit": False, "is_owner": False}
+        else:
+            # 文档不存在，匿名用户也无权限
+            return {"can_view": False, "can_edit": False, "is_owner": False}
+    
     # 检查是否为所有者
     owner_rows = db.query(f"""
         SELECT owner_id FROM {TABLE_DOCUMENTS} WHERE id = {document_id}
@@ -450,9 +465,10 @@ def add_collaborator(db, document_id: int, owner_id: int, collaborator_user_id: 
         else:
             logger.info("插入新协作者记录")
             # 插入新记录
+            now_sql = _format_datetime(datetime.utcnow())
             db.execute(f"""
-                INSERT INTO document_collaborators (document_id, user_id, role)
-                VALUES ({document_id}, {collaborator_user_id}, {role_safe})
+                INSERT INTO document_collaborators (document_id, user_id, role, created_at)
+                VALUES ({document_id}, {collaborator_user_id}, {role_safe}, {now_sql})
             """)
         
         logger.info("协作者添加成功")
@@ -501,7 +517,7 @@ def batch_add_collaborators(db, document_id: int, owner_id: int, users: list) ->
             # 获取用户ID
             from app.services.user_service import _escape
             username_safe = _escape(username)
-            user_rows = db.query(f"SELECT id FROM users WHERE username = {username_safe} LIMIT 1")
+            user_rows = db.query("SELECT id FROM users WHERE username = %s LIMIT 1", (username,))
             
             if not user_rows:
                 results.append({"username": username, "success": False, "message": "用户不存在"})
@@ -621,10 +637,10 @@ def get_shared_documents(db, user_id: int, skip: int = 0, limit: int = 100) -> L
                d.is_locked, d.locked_by, d.created_at, d.updated_at 
         FROM {TABLE_DOCUMENTS} d
         INNER JOIN document_collaborators dc ON d.id = dc.document_id
-        WHERE dc.user_id = {user_id}
+        WHERE dc.user_id = %s
         ORDER BY d.updated_at DESC
-        LIMIT {limit} OFFSET {skip}
-    """)
+        LIMIT %s OFFSET %s
+    """, (user_id, limit, skip))
     
     return [_row_to_document_dict(row) for row in rows]
 
@@ -695,27 +711,34 @@ def create_document(db, document_data_or_schema, owner_id: int) -> Optional[Dict
         raise
 
 
-def update_document(db, document_id: int, document_update, owner_id: int) -> Optional[Dict]:
+def update_document(db, document_id: int, document_update, user_id: int) -> Optional[Dict]:
     """
-    更新文档
+    更新文档（支持所有者或协作者更新）
     
     Args:
         db: 数据库连接对象
         document_id: 文档ID
         document_update: DocumentUpdate 对象或字典，包含要更新的字段
-        owner_id: 文档所有者ID（用于权限验证）
+        user_id: 操作者用户ID（用于获取文档，实际更新权限由调用者验证）
         
     Returns:
-        更新后的文档字典；如果文档不存在或不属于该用户则返回 None
+        更新后的文档字典；如果文档不存在则返回 None
         
     Note:
         - 函数会自动更新 updated_at 字段
         - 不会更新 id、owner_id、created_at 字段
+        - 调用者需要先验证权限（can_edit）
+        - 参数名从 owner_id 改为 user_id 以明确表示实际操作者
     """
-    # 检查文档是否存在且属于当前用户
-    doc = _get_document_by_id_and_owner(db, document_id, owner_id)
+    # 检查文档是否存在（允许所有者或协作者访问）
+    doc = get_document_with_collaborators(db, document_id, user_id)
     if not doc:
-        return None
+        # 如果通过user_id查不到，尝试直接查询文档是否存在
+        # 使用参数化查询避免SQL注入
+        doc_rows = db.query(f"SELECT {DOCUMENT_FIELDS} FROM {TABLE_DOCUMENTS} WHERE id = %s LIMIT 1", (document_id,))
+        if not doc_rows:
+            return None
+        doc = _row_to_document_dict(doc_rows[0])
     
     try:
         # 提取更新数据
@@ -731,11 +754,15 @@ def update_document(db, document_id: int, document_update, owner_id: int) -> Opt
         update_fields.append(f"updated_at = {_format_datetime(datetime.utcnow())}")
         
         if update_fields:
-            sql = f"UPDATE {TABLE_DOCUMENTS} SET {', '.join(update_fields)} WHERE id = {document_id} AND owner_id = {owner_id}"
-            db.execute(sql)
+            # 移除owner_id限制，允许协作者更新（权限已在调用处验证）
+            sql = f"UPDATE {TABLE_DOCUMENTS} SET {', '.join(update_fields)} WHERE id = %s"
+            db.execute(sql, (document_id,))
         
         # 返回更新后的文档
-        return _get_document_by_id_and_owner(db, document_id, owner_id)
+        updated_rows = db.query(f"SELECT {DOCUMENT_FIELDS} FROM {TABLE_DOCUMENTS} WHERE id = %s LIMIT 1", (document_id,))
+        if updated_rows:
+            return _row_to_document_dict(updated_rows[0])
+        return None
     except Exception as e:
         logger.error("更新文档失败，document_id=%s: %s", document_id, e, exc_info=True)
         raise
@@ -759,7 +786,7 @@ def delete_document(db, document_id: int, owner_id: int) -> bool:
         return False
     
     try:
-        db.execute(f"DELETE FROM {TABLE_DOCUMENTS} WHERE id = {document_id} AND owner_id = {owner_id}")
+        db.execute(f"DELETE FROM {TABLE_DOCUMENTS} WHERE id = %s AND owner_id = %s", (document_id, owner_id))
         return True
     except Exception as e:
         logger.error("删除文档失败，document_id=%s: %s", document_id, e, exc_info=True)
@@ -785,10 +812,11 @@ def lock_document(db, document_id: int, owner_id: int) -> bool:
         - 锁定后会自动更新 updated_at 字段
     """
     try:
-        now_sql = _format_datetime(datetime.utcnow())
+        now = datetime.utcnow()
         affected = db.execute(
-            f"UPDATE {TABLE_DOCUMENTS} SET is_locked = TRUE, locked_by = {owner_id}, updated_at = {now_sql} "
-            f"WHERE id = {document_id} AND (is_locked = FALSE OR locked_by = {owner_id})"
+            f"UPDATE {TABLE_DOCUMENTS} SET is_locked = TRUE, locked_by = %s, updated_at = %s "
+            f"WHERE id = %s AND (is_locked = FALSE OR locked_by = %s)",
+            (owner_id, now, document_id, owner_id)
         )
         # affected 可能是 None 或受影响行数
         success = affected is None or affected > 0
@@ -817,10 +845,11 @@ def unlock_document(db, document_id: int, owner_id: int) -> bool:
         - 解锁后会自动更新 updated_at 字段
     """
     try:
-        now_sql = _format_datetime(datetime.utcnow())
+        now = datetime.utcnow()
         affected = db.execute(
-            f"UPDATE {TABLE_DOCUMENTS} SET is_locked = FALSE, locked_by = NULL, updated_at = {now_sql} "
-            f"WHERE id = {document_id} AND locked_by = {owner_id}"
+            f"UPDATE {TABLE_DOCUMENTS} SET is_locked = FALSE, locked_by = NULL, updated_at = %s "
+            f"WHERE id = %s AND locked_by = %s",
+            (now, document_id, owner_id)
         )
         # affected 可能是 None 或受影响行数
         success = affected is None or affected > 0
@@ -1076,7 +1105,8 @@ def get_document_version_count(db, document_id: int) -> int:
         版本数量（整数），如果文档不存在则返回 0
     """
     rows = db.query(
-        f"SELECT COUNT(*) FROM {TABLE_DOCUMENT_VERSIONS} WHERE document_id = {document_id}"
+        f"SELECT COUNT(*) FROM {TABLE_DOCUMENT_VERSIONS} WHERE document_id = %s",
+        (document_id,)
     )
     
     if rows:
@@ -1221,12 +1251,29 @@ def update_template(db, template_id: int, template_update) -> Optional[Dict]:
         # 构建更新字段
         update_fields = _build_update_clause(update_data, exclude_fields=['id', 'created_at'])
         
-        # 添加更新时间
-        update_fields.append(f"updated_at = {_format_datetime(datetime.utcnow())}")
+        # 构建参数化更新
+        set_clauses = []
+        params = []
         
-        if update_fields:
-            sql = f"UPDATE {TABLE_DOCUMENT_TEMPLATES} SET {', '.join(update_fields)} WHERE id = {template_id}"
-            db.execute(sql)
+        for field in update_fields:
+            if '=' in field:
+                field_name, _ = field.split('=', 1)
+                set_clauses.append(f"{field_name.strip()} = %s")
+                # 从原始update_data中获取值
+                field_name = field_name.strip()
+                if field_name in update_data:
+                    params.append(update_data[field_name])
+        
+        # 添加更新时间
+        set_clauses.append("updated_at = %s")
+        params.append(datetime.utcnow())
+        
+        # 添加WHERE条件参数
+        params.append(template_id)
+        
+        if set_clauses:
+            sql = f"UPDATE {TABLE_DOCUMENT_TEMPLATES} SET {', '.join(set_clauses)} WHERE id = %s"
+            db.execute(sql, tuple(params))
         
         # 返回更新后的模板（允许查询非激活模板）
         return _get_template_by_id(db, template_id, active_only=False)
@@ -1255,10 +1302,11 @@ def delete_template(db, template_id: int) -> bool:
         return False
     
     try:
-        now_sql = _format_datetime(datetime.utcnow())
+        now = datetime.utcnow()
         db.execute(
-            f"UPDATE {TABLE_DOCUMENT_TEMPLATES} SET is_active = FALSE, updated_at = {now_sql} "
-            f"WHERE id = {template_id}"
+            f"UPDATE {TABLE_DOCUMENT_TEMPLATES} SET is_active = FALSE, updated_at = %s "
+            f"WHERE id = %s",
+            (now, template_id)
         )
         return True
     except Exception as e:

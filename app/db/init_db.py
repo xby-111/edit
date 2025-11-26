@@ -2,20 +2,26 @@
 数据库初始化模块
 """
 import logging
-from app.db.session import conn
+from app.db.session import get_global_connection
 import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 def init_db():
-    """
-    Initialize the database by testing connection and creating tables if needed.
-    """
+    """初始化数据库表结构"""
+    logger.info("开始初始化数据库...")
+    
+    # 获取数据库连接
+    conn = get_global_connection()
+    
+    # 检查数据库连接
     try:
-        # Test database connection（py-opengauss 要用 query 来拿结果）
         result = conn.query("SELECT 1")
-        logger.info(f"数据库连接成功: {result}")
+        logger.info("数据库连接成功")
+    except Exception as e:
+        logger.error(f"数据库连接失败: {e}")
+        raise
 
         # Create tables if they don't exist
         # Users table
@@ -331,26 +337,16 @@ def insert_default_templates():
         }
     ]
     
+    conn = get_global_connection()
     for template in default_templates:
-        name_safe = _escape(template['name'])
-        desc_safe = _escape(template['description'])
-        content_safe = _escape(template['content'])
-        category_safe = _escape(template['category'])
-        
         # 检查模板是否已存在
-        existing = conn.query(f"SELECT id FROM document_templates WHERE name = {name_safe} LIMIT 1")
+        existing = conn.query("SELECT id FROM document_templates WHERE name = %s LIMIT 1", (template['name'],))
         if not existing:
-            conn.execute(f"""
+            conn.execute("""
                 INSERT INTO document_templates (name, description, content, category, is_active) 
-                VALUES ({name_safe}, {desc_safe}, {content_safe}, {category_safe}, TRUE)
-            """)
+                VALUES (%s, %s, %s, %s, TRUE)
+            """, (template['name'], template['description'], template['content'], template['category']))
 
-def _escape(value: str | None) -> str:
-    """简单转义单引号，避免 SQL 语法错误"""
-    if value is None:
-        return "NULL"
-    escaped_value = value.replace("'", "''")
-    return f"'{escaped_value}'"
 
 if __name__ == "__main__":
     init_db()

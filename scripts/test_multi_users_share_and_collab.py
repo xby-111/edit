@@ -154,46 +154,60 @@ def get_document(user_key: str, doc_id: int) -> Dict:
         log(f"❌ 用户 {USERS[user_key]['username']} 获取文档异常: {e}", "ERROR")
         return {}
 
-async def websocket_connect(user_key: str, doc_id: int, message_queue: asyncio.Queue) -> bool:
-    """建立WebSocket连接"""
+async def websocket_connect(user_key: str, doc_id: int, message_queue: asyncio.Queue, timeout: float = 30.0) -> bool:
+    """建立WebSocket连接并监听消息"""
     try:
         uri = f"{WS_URL}/ws/documents/{doc_id}?token={tokens[user_key]}&username={USERS[user_key]['username']}"
         async with websockets.connect(uri) as websocket:
             log(f"✅ 用户 {USERS[user_key]['username']} WebSocket 连接成功")
             
-            # 监听消息
-            while True:
-                try:
-                    message = await websocket.recv()
-                    data = json.loads(message)
-                    await message_queue.put({"user": user_key, "message": data})
-                except websockets.exceptions.ConnectionClosed:
-                    log(f"ℹ️  用户 {USERS[user_key]['username']} WebSocket 连接关闭")
-                    break
-                except Exception as e:
-                    log(f"❌ 用户 {USERS[user_key]['username']} WebSocket 接收消息异常: {e}", "ERROR")
-                    break
+            # 监听消息（带超时）
+            try:
+                while True:
+                    try:
+                        message = await asyncio.wait_for(websocket.recv(), timeout=timeout)
+                        data = json.loads(message)
+                        await message_queue.put({"user": user_key, "message": data})
+                        log(f"📨 用户 {USERS[user_key]['username']} 收到消息: {data.get('type', 'unknown')}")
+                    except asyncio.TimeoutError:
+                        log(f"⏱️  用户 {USERS[user_key]['username']} WebSocket 接收超时，继续监听...")
+                        continue
+            except websockets.exceptions.ConnectionClosed:
+                log(f"ℹ️  用户 {USERS[user_key]['username']} WebSocket 连接关闭")
+            except Exception as e:
+                log(f"❌ 用户 {USERS[user_key]['username']} WebSocket 接收消息异常: {e}", "ERROR")
         return True
     except Exception as e:
         log(f"❌ 用户 {USERS[user_key]['username']} WebSocket 连接异常: {e}", "ERROR")
         return False
 
-async def websocket_send(user_key: str, doc_id: int, content: str) -> bool:
-    """发送WebSocket消息"""
+async def websocket_send(user_key: str, doc_id: int, content: str, message_queue: asyncio.Queue) -> bool:
+    """发送WebSocket消息（使用已建立的连接）"""
     try:
         uri = f"{WS_URL}/ws/documents/{doc_id}?token={tokens[user_key]}&username={USERS[user_key]['username']}"
         async with websockets.connect(uri) as websocket:
             # 等待初始化
             init_received = False
-            while not init_received:
+            init_timeout = 5.0
+            start_time = time.time()
+            
+            while not init_received and (time.time() - start_time) < init_timeout:
                 try:
-                    message = await websocket.recv()
+                    message = await asyncio.wait_for(websocket.recv(), timeout=1.0)
                     data = json.loads(message)
                     if data.get("type") == "init":
                         init_received = True
                         log(f"✅ 用户 {USERS[user_key]['username']} WebSocket 初始化完成")
-                except:
+                        # 将init消息也放入队列
+                        await message_queue.put({"user": user_key, "message": data})
+                except asyncio.TimeoutError:
+                    continue
+                except Exception as e:
+                    log(f"⚠️  等待初始化时出错: {e}", "WARNING")
                     break
+            
+            if not init_received:
+                log(f"⚠️  用户 {USERS[user_key]['username']} WebSocket 初始化超时", "WARNING")
             
             # 发送内容更新
             message = {
@@ -201,10 +215,10 @@ async def websocket_send(user_key: str, doc_id: int, content: str) -> bool:
                 "payload": {"html": content}
             }
             await websocket.send(json.dumps(message))
-            log(f"📤 用户 {USERS[user_key]['username']} 发送内容更新")
+            log(f"📤 用户 {USERS[user_key]['username']} 发送内容更新: {content[:50]}...")
             
-            # 等待一小段时间确保消息发送
-            await asyncio.sleep(0.5)
+            # 等待一小段时间确保消息发送和接收
+            await asyncio.sleep(1.0)
             return True
     except Exception as e:
         log(f"❌ 用户 {USERS[user_key]['username']} WebSocket 发送消息异常: {e}", "ERROR")
@@ -233,58 +247,94 @@ async def test_multi_user_collaboration(doc_id: int) -> bool:
     # 测试1: A 发送内容更新
     log("📝 测试1: A 发送内容更新")
     content_a = "<p>A用户编辑的内容</p>"
-    await websocket_send("user_a", doc_id, content_a)
-    await asyncio.sleep(1)
+    await websocket_send("user_a", doc_id, content_a, message_queues["user_a"])
+    await asyncio.sleep(2)  # 增加等待时间确保消息传播
     
-    # 检查B和C是否收到
+    # 检查B和C是否收到（从队列中读取）
     b_received_a = False
     c_received_a = False
-    while not message_queues["user_b"].empty():
-        msg = await message_queues["user_b"].get()
-        if msg["message"].get("type") == "content_update" and msg["message"].get("payload", {}).get("html") == content_a:
-            b_received_a = True
-            log("✅ B 收到 A 的内容更新")
     
+    # 处理B的消息队列
+    b_messages = []
+    while not message_queues["user_b"].empty():
+        b_messages.append(await message_queues["user_b"].get())
+    
+    for msg in b_messages:
+        msg_data = msg["message"]
+        if msg_data.get("type") == "content_update":
+            payload_html = msg_data.get("payload", {}).get("html", "")
+            if payload_html == content_a:
+                b_received_a = True
+                log("✅ B 收到 A 的内容更新")
+    
+    # 处理C的消息队列
+    c_messages = []
     while not message_queues["user_c"].empty():
-        msg = await message_queues["user_c"].get()
-        if msg["message"].get("type") == "content_update" and msg["message"].get("payload", {}).get("html") == content_a:
-            c_received_a = True
-            log("✅ C 收到 A 的内容更新")
+        c_messages.append(await message_queues["user_c"].get())
+    
+    for msg in c_messages:
+        msg_data = msg["message"]
+        if msg_data.get("type") == "content_update":
+            payload_html = msg_data.get("payload", {}).get("html", "")
+            if payload_html == content_a:
+                c_received_a = True
+                log("✅ C 收到 A 的内容更新")
     
     # 测试2: B 发送内容更新
     log("📝 测试2: B 发送内容更新")
     content_b = "<p>B用户编辑的内容</p>"
-    await websocket_send("user_b", doc_id, content_b)
-    await asyncio.sleep(1)
+    await websocket_send("user_b", doc_id, content_b, message_queues["user_b"])
+    await asyncio.sleep(2)
     
     # 检查A和C是否收到
     a_received_b = False
     c_received_b = False
-    while not message_queues["user_a"].empty():
-        msg = await message_queues["user_a"].get()
-        if msg["message"].get("type") == "content_update" and msg["message"].get("payload", {}).get("html") == content_b:
-            a_received_b = True
-            log("✅ A 收到 B 的内容更新")
     
+    # 处理A的消息队列
+    a_messages = []
+    while not message_queues["user_a"].empty():
+        a_messages.append(await message_queues["user_a"].get())
+    
+    for msg in a_messages:
+        msg_data = msg["message"]
+        if msg_data.get("type") == "content_update":
+            payload_html = msg_data.get("payload", {}).get("html", "")
+            if payload_html == content_b:
+                a_received_b = True
+                log("✅ A 收到 B 的内容更新")
+    
+    # 处理C的消息队列（继续读取）
     while not message_queues["user_c"].empty():
-        msg = await message_queues["user_c"].get()
-        if msg["message"].get("type") == "content_update" and msg["message"].get("payload", {}).get("html") == content_b:
-            c_received_b = True
-            log("✅ C 收到 B 的内容更新")
+        c_messages.append(await message_queues["user_c"].get())
+    
+    for msg in c_messages:
+        msg_data = msg["message"]
+        if msg_data.get("type") == "content_update":
+            payload_html = msg_data.get("payload", {}).get("html", "")
+            if payload_html == content_b:
+                c_received_b = True
+                log("✅ C 收到 B 的内容更新")
     
     # 测试3: C（viewer）发送内容更新，应该被拒绝
     log("📝 测试3: C（viewer）发送内容更新，应该被拒绝")
     content_c = "<p>C用户尝试编辑的内容</p>"
-    await websocket_send("user_c", doc_id, content_c)
-    await asyncio.sleep(1)
+    await websocket_send("user_c", doc_id, content_c, message_queues["user_c"])
+    await asyncio.sleep(2)
     
     # 检查C是否收到错误消息
     c_received_error = False
+    
+    # 处理C的消息队列（继续读取）
     while not message_queues["user_c"].empty():
-        msg = await message_queues["user_c"].get()
-        if msg["message"].get("type") == "error":
-            c_received_error = True
-            log(f"✅ C 收到错误消息: {msg['message'].get('payload', {}).get('message', 'unknown')}")
+        c_messages.append(await message_queues["user_c"].get())
+    
+    for msg in c_messages:
+        msg_data = msg["message"]
+        if msg_data.get("type") == "error":
+            error_msg = msg_data.get("payload", {}).get("message", "unknown")
+            if "无编辑权限" in error_msg or "无权限" in error_msg:
+                c_received_error = True
+                log(f"✅ C 收到权限错误消息: {error_msg}")
     
     # 关闭连接任务
     for task in connection_tasks:

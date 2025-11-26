@@ -200,8 +200,13 @@ async def lock_document_endpoint(
     db = Depends(get_db)
 ):
     """锁定文档"""
-    # 先检查文档是否存在且用户有权限
-    document = get_document(db, document_id, current_user.id)
+    # 检查文档权限（需要编辑权限才能锁定）
+    permission = check_document_permission(db, document_id, current_user.id)
+    if not permission["can_edit"]:
+        raise HTTPException(status_code=403, detail="无编辑权限，无法锁定文档")
+    
+    # 获取文档信息检查锁定状态
+    document = get_document_with_collaborators(db, document_id, current_user.id)
     if not document:
         raise HTTPException(status_code=404, detail="文档不存在")
     
@@ -225,8 +230,13 @@ async def unlock_document_endpoint(
     db = Depends(get_db)
 ):
     """解锁文档"""
-    # 先检查文档是否存在且用户有权限
-    document = get_document(db, document_id, current_user.id)
+    # 检查文档权限（需要编辑权限才能解锁）
+    permission = check_document_permission(db, document_id, current_user.id)
+    if not permission["can_edit"]:
+        raise HTTPException(status_code=403, detail="无编辑权限，无法解锁文档")
+    
+    # 获取文档信息检查锁定状态
+    document = get_document_with_collaborators(db, document_id, current_user.id)
     if not document:
         raise HTTPException(status_code=404, detail="文档不存在")
     
@@ -404,7 +414,12 @@ async def get_document_endpoint(
     db = Depends(get_db)
 ):
     """获取文档详情"""
-    from app.services.document_service import get_document_with_collaborators
+    from app.services.document_service import get_document_with_collaborators, check_document_permission
+    # 先检查权限
+    permission = check_document_permission(db, document_id, current_user.id)
+    if not permission["can_view"]:
+        raise HTTPException(status_code=403, detail="文档不存在或无权限")
+    
     document = get_document_with_collaborators(db, document_id, current_user.id)
     if not document:
         raise HTTPException(status_code=404, detail="文档不存在或无权限")
@@ -448,9 +463,8 @@ async def update_document_endpoint(
         raise HTTPException(status_code=403, detail="文档已被锁定，无法编辑")
     
     try:
-        # 使用所有者ID进行更新，确保权限正确
-        owner_id = document['owner_id']
-        updated_document = update_document(db, document_id, document_update, owner_id)
+        # 使用实际操作者ID进行更新（update_document函数参数已改为user_id）
+        updated_document = update_document(db, document_id, document_update, current_user.id)
         if not updated_document:
             raise HTTPException(status_code=404, detail="文档不存在")
         
@@ -501,10 +515,10 @@ async def get_document_versions_endpoint(
     db = Depends(get_db)
 ):
     """获取文档版本列表"""
-    # 先检查文档是否存在且用户有权限
-    document = get_document(db, document_id, current_user.id)
-    if not document:
-        raise HTTPException(status_code=404, detail="文档不存在")
+    # 检查文档权限（允许所有者或协作者查看）
+    permission = check_document_permission(db, document_id, current_user.id)
+    if not permission["can_view"]:
+        raise HTTPException(status_code=403, detail="无权限查看此文档")
     
     versions = get_document_versions(db, document_id)
     return [{
@@ -525,10 +539,10 @@ async def create_document_version_endpoint(
     db = Depends(get_db)
 ):
     """创建文档版本"""
-    # 先检查文档是否存在且用户有权限
-    document = get_document(db, document_id, current_user.id)
-    if not document:
-        raise HTTPException(status_code=404, detail="文档不存在")
+    # 检查文档权限（需要编辑权限才能创建版本）
+    permission = check_document_permission(db, document_id, current_user.id)
+    if not permission["can_edit"]:
+        raise HTTPException(status_code=403, detail="无编辑权限，无法创建版本")
     
     try:
         new_version = create_document_version(
@@ -666,9 +680,10 @@ async def get_document_comments(
     db=Depends(get_db)
 ):
     # 先校验文档存在且用户有权限
-    doc = get_document(db, document_id, current_user.id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="文档不存在或无权访问")
+    from app.services.document_service import check_document_permission
+    permission = check_document_permission(db, document_id, current_user.id)
+    if not permission["can_view"]:
+        raise HTTPException(status_code=403, detail="文档不存在或无权访问")
     
     try:
         return list_comments(db, document_id)
@@ -685,9 +700,10 @@ async def create_document_comment(
     db=Depends(get_db),
 ):
     # 先校验文档存在且用户有权限
-    doc = get_document(db, document_id, current_user.id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="文档不存在或无权访问")
+    from app.services.document_service import check_document_permission
+    permission = check_document_permission(db, document_id, current_user.id)
+    if not permission["can_view"]:
+        raise HTTPException(status_code=403, detail="文档不存在或无权访问")
         
     try:
         return create_comment(
@@ -708,9 +724,10 @@ async def create_document_comment(
 @router.get("/documents/{document_id}/tasks", response_model=List[Task], summary="获取文档任务")
 async def get_document_tasks(document_id: int, current_user=Depends(get_current_user), db=Depends(get_db)):
     # 先校验文档存在且用户有权限
-    doc = get_document(db, document_id, current_user.id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="文档不存在或无权访问")
+    from app.services.document_service import check_document_permission
+    permission = check_document_permission(db, document_id, current_user.id)
+    if not permission["can_view"]:
+        raise HTTPException(status_code=403, detail="文档不存在或无权访问")
         
     try:
         return list_tasks(db, document_id)
@@ -726,10 +743,11 @@ async def create_document_task(
     current_user=Depends(get_current_user),
     db=Depends(get_db),
 ):
-    # 先校验文档存在且用户有权限
-    doc = get_document(db, document_id, current_user.id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="文档不存在或无权访问")
+    # 先校验文档存在且用户有权限（需要编辑权限才能创建任务）
+    from app.services.document_service import check_document_permission
+    permission = check_document_permission(db, document_id, current_user.id)
+    if not permission["can_edit"]:
+        raise HTTPException(status_code=403, detail="无编辑权限，无法创建任务")
         
     try:
         assignee_id = getattr(task_in, 'assignee_id', None) or getattr(task_in, 'assigned_to', None)
@@ -756,9 +774,19 @@ async def update_task_endpoint(
     db=Depends(get_db)
 ):
     # 先获取任务信息以检查所属文档
-    task = get_document(db, None, current_user.id, task_id=task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="任务不存在或无权访问")
+    from app.services.task_service import list_tasks
+    # 查询任务获取document_id
+    task_rows = db.query("SELECT document_id FROM tasks WHERE id = %s LIMIT 1", (task_id,))
+    if not task_rows:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    
+    document_id = task_rows[0][0]
+    
+    # 检查文档权限
+    from app.services.document_service import check_document_permission
+    permission = check_document_permission(db, document_id, current_user.id)
+    if not permission["can_view"]:
+        raise HTTPException(status_code=403, detail="无权访问该任务所属的文档")
         
     try:
         due = getattr(task_in, "due_at", None) or getattr(task_in, "due_date", None) or getattr(task_in, "deadline", None)
@@ -794,9 +822,7 @@ async def add_collaborator_endpoint(
     
     # 获取协作者用户ID
     try:
-        from app.services.user_service import get_user_by_username, _escape
-        username_safe = _escape(username)
-        user_rows = db.query(f"SELECT id FROM users WHERE username = {username_safe} LIMIT 1")
+        user_rows = db.query("SELECT id FROM users WHERE username = %s LIMIT 1", (username,))
         
         if not user_rows:
             raise HTTPException(status_code=404, detail="协作用户不存在")
@@ -887,79 +913,44 @@ async def get_collaborators_endpoint(
         raise HTTPException(status_code=500, detail="获取协作者列表失败")
 
 
-@router.delete("/documents/{document_id}/collaborators/{user_id}", summary="移除文档协作者", description="从文档中移除指定的协作者")
-async def remove_collaborator_endpoint(
+@router.delete("/documents/{document_id}/collaborators/{username}", summary="移除文档协作者（通过用户名）", description="从文档中移除指定协作者")
+async def remove_collaborator_by_username_endpoint(
     document_id: int,
-    user_id: int,
+    username: str,
     current_user = Depends(get_current_user), 
     db = Depends(get_db)
 ):
-    """移除文档协作者"""
+    """移除文档协作者（通过用户名）"""
     # 检查文档是否存在且用户为所有者
     if not is_document_owner(db, document_id, current_user.id):
         raise HTTPException(status_code=404, detail="文档不存在或无权限")
     
+    # 获取协作者用户ID
     try:
-        success = remove_collaborator(db, document_id, current_user.id, user_id)
-        if not success:
-            raise HTTPException(status_code=404, detail="协作者不存在或移除失败")
+        user_rows = db.query("SELECT id FROM users WHERE username = %s LIMIT 1", (username,))
+        
+        if not user_rows:
+            raise HTTPException(status_code=404, detail="协作用户不存在")
             
-        return {"message": "协作者已成功移除"}
+        collaborator_user_id = user_rows[0][0]
+        
+        # 不能移除自己
+        if collaborator_user_id == current_user.id:
+            raise HTTPException(status_code=400, detail="不能移除自己")
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("移除协作者失败: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail="移除协作者失败")
-        raise HTTPException(status_code=400, detail="缺少用户列表")
-    
-    # 检查文档是否存在且用户为所有者
-    if not is_document_owner(db, document_id, current_user.id):
-        raise HTTPException(status_code=404, detail="文档不存在或无权限")
-    
-    # 批量添加协作者
-    try:
-        results = batch_add_collaborators(db, document_id, current_user.id, users)
-        
-        # 统计成功和失败数量
-        success_count = sum(1 for r in results if r.get("success"))
-        failed_count = len(results) - success_count
-        
-        return {
-            "total": len(results),
-            "success": success_count,
-            "failed": failed_count,
-            "results": results
-        }
-        
-    except Exception as e:
-        logger.error("批量添加协作者失败: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail="批量添加协作者失败")
-
-
-@router.delete("/documents/{document_id}/collaborators/{user_id}", summary="移除文档协作者", description="从文档中移除指定协作者")
-async def remove_collaborator_endpoint(
-    document_id: int,
-    user_id: int,
-    current_user = Depends(get_current_user), 
-    db = Depends(get_db)
-):
-    """移除文档协作者"""
-    # 检查文档是否存在且用户为所有者
-    if not is_document_owner(db, document_id, current_user.id):
-        raise HTTPException(status_code=404, detail="文档不存在或无权限")
-    
-    # 不能移除自己
-    if user_id == current_user.id:
-        raise HTTPException(status_code=400, detail="不能移除自己")
+        logger.error("获取协作用户信息失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="获取用户信息失败")
     
     # 移除协作者
     try:
-        success = remove_collaborator(db, document_id, current_user.id, user_id)
+        success = remove_collaborator(db, document_id, current_user.id, collaborator_user_id)
         if not success:
             raise HTTPException(status_code=500, detail="移除协作者失败")
             
-        return {"message": "协作者已成功移除"}
+        return {"message": f"已成功移除协作者 {username}"}
         
     except HTTPException:
         raise
@@ -968,17 +959,3 @@ async def remove_collaborator_endpoint(
         raise HTTPException(status_code=500, detail="移除协作者失败")
 
 
-@router.get("/documents/{document_id}/collaborators", summary="获取文档协作者列表", description="获取文档的所有协作者")
-async def get_document_collaborators_endpoint(
-    document_id: int,
-    current_user = Depends(get_current_user), 
-    db = Depends(get_db)
-):
-    """获取文档协作者列表"""
-    try:
-        collaborators = get_collaborators(db, document_id, current_user.id)
-        return {"collaborators": collaborators}
-        
-    except Exception as e:
-        logger.error("获取协作者列表失败: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail="获取协作者列表失败")

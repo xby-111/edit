@@ -1,0 +1,7 @@
+❌ 用户服务模块 (app.services.user_service) - 导入失败: module 'py_opengauss' has no attribute 'Connection'
+✅ WebSocket服务模块 (app.services.websocket_service) - 导入成功
+❌ WebSocket路由模块 (app.api.routers.ws) - 导入失败: module 'py_opengauss' has no attribute 'Connection'
+❌ 安全模块 (app.core.security) - 导入失败: module 'py_opengauss' has no attribute 'Connection'
+❌ 数据库会话模块 (app.db.session) - 导入失败: module 'py_opengauss' has no attribute 'Connection'
+
+导入测试完成: 1/5 成功

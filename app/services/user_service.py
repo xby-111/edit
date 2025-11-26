@@ -24,15 +24,48 @@ def _format_bool(value: bool | None) -> str:
     return "TRUE" if value else "FALSE"
 
 def _format_datetime(dt: datetime | None) -> str:
-    """格式化日期时间为 SQL 字符串"""
+    """格式化日期时间为 SQL 字符串（仅用于拼接SQL，参数化时不要用）"""
     if dt is None:
         return "NULL"
     return f"'{dt.strftime('%Y-%m-%d %H:%M:%S')}'"
 
+def _parse_db_datetime(dt_value) -> datetime | None:
+    """解析数据库返回的datetime值（兼容多种格式）"""
+    if dt_value is None:
+        return None
+    
+    if isinstance(dt_value, datetime):
+        return dt_value
+    
+    if isinstance(dt_value, str):
+        # 尝试解析常见格式
+        formats = [
+            '%Y-%m-%d %H:%M:%S',
+            '%Y-%m-%d %H:%M:%S.%f',
+            '%Y-%m-%dT%H:%M:%S',
+            '%Y-%m-%dT%H:%M:%S.%f',
+            '%Y-%m-%dT%H:%M:%SZ',
+            '%Y-%m-%dT%H:%M:%S.%fZ'
+        ]
+        
+        for fmt in formats:
+            try:
+                return datetime.strptime(dt_value, fmt)
+            except ValueError:
+                continue
+    
+    return None
+
+# 可更新用户字段白名单（防止字段名注入）
+_UPDATABLE_USER_FIELDS = {
+    'username', 'email', 'phone', 'full_name', 'bio', 'address', 
+    'avatar_url', 'phone_secondary', 'is_active', 'role'
+}
+
 def get_user(db, user_id: int):
     """获取用户 - 使用 py-opengauss 的 query 方法"""
     # 使用 py-opengauss 的 query 方法查询
-    rows = db.query(f"SELECT id, username, email, phone, is_active, role, avatar_url, full_name, bio, address, phone_secondary, created_at, updated_at FROM users WHERE id = {user_id} LIMIT 1")
+    rows = db.query("SELECT id, username, email, phone, is_active, role, avatar_url, full_name, bio, address, phone_secondary, created_at, updated_at FROM users WHERE id = %s LIMIT 1", (user_id,))
     
     if rows:
         result = rows[0]  # 取第一行
@@ -55,9 +88,8 @@ def get_user(db, user_id: int):
 
 def get_user_by_username(db, username: str):
     """通过用户名获取用户 - 使用 py-opengauss 的 query 方法"""
-    username_safe = _escape(username)
     # 使用 py-opengauss 的 query 方法查询
-    rows = db.query(f"SELECT id, username, email, phone, is_active, role, hashed_password, created_at, updated_at FROM users WHERE username = {username_safe} LIMIT 1")
+    rows = db.query("SELECT id, username, email, phone, is_active, role, hashed_password, created_at, updated_at FROM users WHERE username = %s LIMIT 1", (username,))
     
     if rows:
         result = rows[0]  # 取第一行
@@ -76,9 +108,8 @@ def get_user_by_username(db, username: str):
 
 def get_user_by_email(db, email: str):
     """通过邮箱获取用户 - 使用 py-opengauss 的 query 方法"""
-    email_safe = _escape(email)
     # 使用 py-opengauss 的 query 方法查询
-    rows = db.query(f"SELECT id, username, email, phone, is_active, role, created_at, updated_at FROM users WHERE email = {email_safe} LIMIT 1")
+    rows = db.query("SELECT id, username, email, phone, is_active, role, created_at, updated_at FROM users WHERE email = %s LIMIT 1", (email,))
     
     if rows:
         result = rows[0]  # 取第一行
@@ -96,9 +127,8 @@ def get_user_by_email(db, email: str):
 
 def get_user_by_phone(db, phone: str):
     """通过手机号获取用户 - 使用 py-opengauss 的 query 方法"""
-    phone_safe = _escape(phone)
     # 使用 py-opengauss 的 query 方法查询
-    rows = db.query(f"SELECT id, username, email, phone, is_active, role, created_at, updated_at FROM users WHERE phone = {phone_safe} LIMIT 1")
+    rows = db.query("SELECT id, username, email, phone, is_active, role, created_at, updated_at FROM users WHERE phone = %s LIMIT 1", (phone,))
     
     if rows:
         result = rows[0]  # 取第一行
@@ -117,7 +147,7 @@ def get_user_by_phone(db, phone: str):
 def get_users(db, skip: int = 0, limit: int = 100):
     """获取用户列表 - 使用 py-opengauss 的 query 方法"""
     # 使用 py-opengauss 的 query 方法查询
-    rows = db.query(f"SELECT id, username, email, phone, is_active, role, created_at, updated_at FROM users ORDER BY id LIMIT {limit} OFFSET {skip}")
+    rows = db.query("SELECT id, username, email, phone, is_active, role, created_at, updated_at FROM users ORDER BY id LIMIT %s OFFSET %s", (limit, skip))
     
     users = []
     for result in rows:
@@ -147,23 +177,18 @@ def create_user(db, user: UserCreate):
     hashed_password = get_password_hash(user.password)
     now = datetime.utcnow()
     
-    # 构造安全的 SQL 字符串
-    username_safe = _escape(user.username)
-    email_safe = _escape(user.email)
+    # 使用参数化查询插入用户数据
     phone_value = getattr(user, 'phone', None)
-    phone_safe = _escape(phone_value) if phone_value else "NULL"
-    is_active_sql = _format_bool(user.is_active if user.is_active is not None else True)
-    role_safe = _escape(user.role if user.role else "viewer")
-    now_sql = _format_datetime(now)
+    is_active = user.is_active if user.is_active is not None else True
+    role = user.role if user.role else "viewer"
     
-    # 使用 py-opengauss 的 execute 方法插入用户数据
-    db.execute(f"""
+    db.execute("""
         INSERT INTO users (username, email, phone, hashed_password, is_active, role, created_at, updated_at) 
-        VALUES ({username_safe}, {email_safe}, {phone_safe}, '{hashed_password}', {is_active_sql}, {role_safe}, {now_sql}, {now_sql})
-    """)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    """, (user.username, user.email, phone_value, hashed_password, is_active, role, now, now))
     
     # 获取刚插入的用户数据
-    rows = db.query(f"SELECT id, username, email, phone, is_active, role, created_at, updated_at FROM users WHERE username = {username_safe} ORDER BY id DESC LIMIT 1")
+    rows = db.query("SELECT id, username, email, phone, is_active, role, created_at, updated_at FROM users WHERE username = %s ORDER BY id DESC LIMIT 1", (username,))
     
     if rows:
         result = rows[0]
@@ -181,7 +206,7 @@ def create_user(db, user: UserCreate):
 
 def update_user(db, user_id: int, user_update):
     """
-    更新用户信息 - 使用 py-opengauss 的 execute 方法
+    更新用户信息 - 使用参数化查询
     
     Args:
         db: 数据库连接
@@ -196,9 +221,6 @@ def update_user(db, user_id: int, user_update):
     if not user:
         return None
     
-    # 构建更新语句
-    update_fields = []
-    
     # 获取更新数据
     update_data = {}
     if hasattr(user_update, 'model_dump'):
@@ -206,29 +228,40 @@ def update_user(db, user_id: int, user_update):
     elif hasattr(user_update, '__dict__'):
         update_data = user_update.__dict__
     
-    # 构建更新字段
+    # 使用白名单过滤字段，防止字段名注入
+    valid_updates = {}
     for field, value in update_data.items():
-        if field not in ['id', 'created_at', 'hashed_password']:  # 不更新这些字段
-            if field in ['username', 'email', 'phone', 'full_name', 'bio', 'address', 'avatar_url']:
-                # 字符串字段
-                value_safe = _escape(value)
-                update_fields.append(f"{field} = {value_safe}")
-            elif field in ['is_active']:
-                # 布尔字段
-                value_sql = _format_bool(value)
-                update_fields.append(f"{field} = {value_sql}")
-            else:
-                # 其他字段
-                value_safe = _escape(str(value))
-                update_fields.append(f"{field} = {value_safe}")
+        if field in _UPDATABLE_USER_FIELDS:
+            valid_updates[field] = value
+    
+    if not valid_updates:
+        # 没有有效字段，直接返回原用户
+        return user
+    
+    # 构建参数化更新语句
+    set_clauses = []
+    params = []
+    
+    for field, value in valid_updates.items():
+        if field in ['is_active']:
+            # 布尔字段
+            set_clauses.append(f"{field} = %s")
+            params.append(_format_bool(value))
+        else:
+            # 字符串字段
+            set_clauses.append(f"{field} = %s")
+            params.append(value if value is not None else None)
     
     # 添加更新时间
-    update_fields.append(f"updated_at = {_format_datetime(datetime.utcnow())}")
+    set_clauses.append("updated_at = %s")
+    params.append(datetime.utcnow())
     
-    if update_fields:
-        # 使用 py-opengauss 的 execute 方法更新
-        sql = f"UPDATE users SET {', '.join(update_fields)} WHERE id = {user_id}"
-        db.execute(sql)
+    # 添加WHERE条件参数
+    params.append(user_id)
+    
+    # 执行参数化更新
+    sql = f"UPDATE users SET {', '.join(set_clauses)} WHERE id = %s"
+    db.execute(sql, params)
     
     # 返回更新后的用户数据
     return get_user(db, user_id)
@@ -250,28 +283,26 @@ def delete_user(db, user_id: int):
         return False
     
     # 使用 py-opengauss 的 execute 方法删除用户
-    db.execute(f"DELETE FROM users WHERE id = {user_id}")
+    db.execute("DELETE FROM users WHERE id = %s", (user_id,))
     return True
 
 def update_user_password(db, user_id: int, new_password: str):
-    """更新用户密码 - 使用 py-opengauss 的 execute 方法"""
+    """更新用户密码 - 使用参数化查询"""
     user = get_user(db, user_id)
     if user:
         hashed_password = get_password_hash(new_password)
         now = datetime.utcnow()
-        # 使用 py-opengauss 的 execute 方法更新
-        db.execute(f"UPDATE users SET hashed_password = '{hashed_password}', updated_at = {_format_datetime(now)} WHERE id = {user_id}")
+        # 使用 py-opengauss 的 execute 方法更新（直接传datetime对象）
+        db.execute("UPDATE users SET hashed_password = %s, updated_at = %s WHERE id = %s", 
+                  (hashed_password, now, user_id))
         return get_user(db, user_id)
     return None
 
 def update_user_profile(db, user_id: int, profile_update):
-    """更新用户个人资料 - 使用 py-opengauss 的 execute 方法"""
+    """更新用户个人资料 - 使用参数化查询"""
     user = get_user(db, user_id)
     if not user:
         return None
-    
-    # 构建更新语句
-    update_fields = []
     
     # 获取更新数据
     update_data = {}
@@ -280,25 +311,35 @@ def update_user_profile(db, user_id: int, profile_update):
     elif hasattr(profile_update, '__dict__'):
         update_data = profile_update.__dict__
     
-    # 构建更新字段
+    # 使用白名单过滤字段（个人资料相关）
+    profile_fields = {'full_name', 'bio', 'address', 'avatar_url', 'phone_secondary'}
+    valid_updates = {}
     for field, value in update_data.items():
-        if field not in ['id', 'username', 'email', 'created_at', 'updated_at', 'hashed_password']:  # 不更新这些字段
-            if field in ['full_name', 'bio', 'address', 'avatar_url', 'phone_secondary']:
-                # 字符串字段
-                value_safe = _escape(value)
-                update_fields.append(f"{field} = {value_safe}")
-            else:
-                # 其他字段
-                value_safe = _escape(str(value))
-                update_fields.append(f"{field} = {value_safe}")
+        if field in profile_fields:
+            valid_updates[field] = value
+    
+    if not valid_updates:
+        # 没有有效字段，直接返回原用户
+        return user
+    
+    # 构建参数化更新语句
+    set_clauses = []
+    params = []
+    
+    for field, value in valid_updates.items():
+        set_clauses.append(f"{field} = %s")
+        params.append(value if value is not None else None)
     
     # 添加更新时间
-    update_fields.append(f"updated_at = {_format_datetime(datetime.utcnow())}")
+    set_clauses.append("updated_at = %s")
+    params.append(datetime.utcnow())
     
-    if update_fields:
-        # 使用 py-opengauss 的 execute 方法更新
-        sql = f"UPDATE users SET {', '.join(update_fields)} WHERE id = {user_id}"
-        db.execute(sql)
+    # 添加WHERE条件参数
+    params.append(user_id)
+    
+    # 执行参数化更新
+    sql = f"UPDATE users SET {', '.join(set_clauses)} WHERE id = %s"
+    db.execute(sql, params)
     
     # 返回更新后的用户数据
     return get_user(db, user_id)
@@ -309,7 +350,7 @@ def get_user_profile(db, user_id: int):
 
 def generate_verification_code(db, user_id: int, code_type: str):
     """
-    生成验证码（6位数字）- 使用 py-opengauss 的 execute 方法
+    生成验证码（6位数字）- 使用参数化查询
     
     Args:
         db: 数据库连接
@@ -323,8 +364,9 @@ def generate_verification_code(db, user_id: int, code_type: str):
     code = str(random.randint(100000, 999999))
     expires = datetime.utcnow() + timedelta(minutes=10)  # 10分钟有效
     
-    # 使用 py-opengauss 的 execute 方法更新
-    db.execute(f"UPDATE users SET verification_code = '{code}', verification_code_expires = {_format_datetime(expires)} WHERE id = {user_id}")
+    # 使用 py-opengauss 的 execute 方法更新（直接传datetime对象）
+    db.execute("UPDATE users SET verification_code = %s, verification_code_expires = %s WHERE id = %s", 
+              (code, expires, user_id))
     
     return code
 
@@ -341,7 +383,7 @@ def verify_verification_code(db, user_id: int, code: str) -> bool:
         验证是否成功
     """
     # 使用 py-opengauss 的 query 方法查询
-    rows = db.query(f"SELECT verification_code, verification_code_expires FROM users WHERE id = {user_id} LIMIT 1")
+    rows = db.query("SELECT verification_code, verification_code_expires FROM users WHERE id = %s LIMIT 1", (user_id,))
     
     if not rows:
         return False
@@ -353,8 +395,13 @@ def verify_verification_code(db, user_id: int, code: str) -> bool:
     if db_code != code:
         return False
     
+    # 解析过期时间（兼容datetime和字符串格式）
+    expires_dt = _parse_db_datetime(expires)
+    if not expires_dt:
+        return False
+    
     # 检查验证码是否过期
-    if expires and expires < datetime.utcnow():
+    if expires_dt < datetime.utcnow():
         return False
     
     return True

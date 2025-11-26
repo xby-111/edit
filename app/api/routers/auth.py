@@ -71,14 +71,7 @@ def register(user: UserCreate, db = Depends(get_db)):
 @router.post("/token", response_model=Token, summary="用户登录", description="验证用户身份并返回访问令牌")
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db = Depends(get_db)):
     # 使用 user_service 中的函数获取用户信息，适配 py-opengauss API
-    from app.services.user_service import _escape
-    
-    # 安全转义用户名，防止 SQL 注入
-    username_safe = _escape(form_data.username)
-    
-    # 使用 py-opengauss 的 query 方法查询用户
-    # 注意：_escape 已经返回了带引号的字符串，所以 SQL 中不需要再加引号
-    rows = db.query(f"SELECT id, username, hashed_password FROM users WHERE username = {username_safe} LIMIT 1")
+    rows = db.query("SELECT id, username, hashed_password FROM users WHERE username = %s LIMIT 1", (form_data.username,))
     
     if not rows:
         raise HTTPException(
