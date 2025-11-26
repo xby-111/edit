@@ -254,6 +254,29 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_acls_res ON acls (resource_type, resource_id)
         """)
 
+        # Notifications table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS notifications (
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                type VARCHAR(32) NOT NULL,
+                title VARCHAR(200) NOT NULL,
+                content TEXT NULL,
+                payload TEXT NULL,
+                is_read BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at TIMESTAMP NOT NULL DEFAULT now()
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications (user_id, created_at DESC)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON notifications (user_id, is_read, created_at DESC)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_notifications_user_type ON notifications (user_id, type, created_at DESC)
+        """)
+
         # 插入默认模板
         insert_default_templates()
 

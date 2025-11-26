@@ -748,11 +748,11 @@ async def create_document_task(
     permission = check_document_permission(db, document_id, current_user.id)
     if not permission["can_edit"]:
         raise HTTPException(status_code=403, detail="无编辑权限，无法创建任务")
-        
+
     try:
         assignee_id = getattr(task_in, 'assignee_id', None) or getattr(task_in, 'assigned_to', None)
         due = getattr(task_in, "due_at", None) or getattr(task_in, "due_date", None) or getattr(task_in, "deadline", None)
-        return create_task(
+        task = create_task(
             db,
             document_id,
             current_user.id,
@@ -761,6 +761,20 @@ async def create_document_task(
             assignee_id,
             due,
         )
+        try:
+            if task.get("assignee_id"):
+                from app.services.notification_service import create_notification
+                create_notification(
+                    db,
+                    user_id=task["assignee_id"],
+                    type="task",
+                    title="你有新的任务",
+                    content=task_in.title,
+                    payload={"task_id": task.get("id"), "document_id": document_id},
+                )
+        except Exception as notify_err:
+            logger.warning("创建任务通知失败: %s", notify_err)
+        return task
     except Exception as e:
         logger.error("创建任务失败: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail="创建任务失败")
