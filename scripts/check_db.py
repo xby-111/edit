@@ -202,29 +202,47 @@ def check_and_add_user_role_column():
 
         if not result:
             print("users 表缺少 role 列，开始添加...")
-            conn.execute("""
+            conn.execute(
+                """
                 ALTER TABLE users
-                ADD COLUMN role TEXT NOT NULL DEFAULT 'user'
-            """)
-            print("✅ 已添加 role 列并设置默认值")
+                ADD COLUMN role TEXT
+                """
+            )
+            print("✅ 已添加 role 列")
         else:
             print("✅ users 表已包含 role 列，无需添加")
 
-        # 回填历史数据为默认值（避免 NULL）
-        conn.execute("""
+        # 确保在更新数据前移除旧的检查约束
+        try:
+            conn.execute("ALTER TABLE users DROP CONSTRAINT IF EXISTS ck_users_role")
+        except Exception as e:
+            print(f"❌ 移除旧的 role 检查约束失败: {e}")
+            return False
+
+        # 回填历史数据为默认值（避免 NULL/非法值）
+        conn.execute(
+            """
             UPDATE users
             SET role = 'user'
             WHERE role IS NULL OR role = '' OR role NOT IN ('admin', 'user')
-        """)
+            """
+        )
 
         # 更新默认值和检查约束
         try:
             conn.execute("ALTER TABLE users ALTER COLUMN role SET DEFAULT 'user'")
         except Exception:
             pass
+
         try:
-            conn.execute("ALTER TABLE users DROP CONSTRAINT IF EXISTS ck_users_role")
-            conn.execute("ALTER TABLE users ADD CONSTRAINT ck_users_role CHECK (role IN ('admin','user'))")
+            conn.execute("ALTER TABLE users ALTER COLUMN role SET NOT NULL")
+        except Exception:
+            pass
+
+        try:
+            conn.execute(
+                "ALTER TABLE users ADD CONSTRAINT ck_users_role CHECK (role IN ('admin','user'))"
+            )
         except Exception as e:
             print(f"⚠️ 更新 role 检查约束失败: {e}")
 
