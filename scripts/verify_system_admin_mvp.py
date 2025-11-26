@@ -13,6 +13,10 @@ import sys
 import uuid
 import requests
 
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
 from app.db.session import get_db_connection, close_connection_safely
 
 BASE_URL = os.environ.get("BASE_URL", "http://127.0.0.1:8000")
