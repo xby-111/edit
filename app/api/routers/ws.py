@@ -301,7 +301,7 @@ async def document_collab_ws(
         if doc:
             await websocket.send_json({
                 "type": "init",
-                "payload": {"html": doc.get("content") or ""},
+                "payload": {"html": doc.get("content") or "", "revision_id": doc.get("latest_revision_id")},
                 "doc_id": document_id,
                 "user": "System",
                 "ts": datetime.utcnow().isoformat(),
@@ -465,6 +465,7 @@ async def document_collab_ws(
                         logger.info(f"文档{document_id}内容已保存（用户{user_id}）")
                         
                         # 持久化成功后，构建广播消息并广播
+                        payload["revision_id"] = updated_doc.get("latest_revision_id")
                         broadcast_message = {
                             "type": msg_type,
                             "doc_id": document_id,
@@ -473,6 +474,15 @@ async def document_collab_ws(
                             "ts": datetime.utcnow().isoformat(),
                         }
                         await manager.broadcast(document_id, broadcast_message, sender=websocket)
+                        try:
+                            await websocket.send_json({
+                                "type": "sync_ack",
+                                "doc_id": document_id,
+                                "payload": {"revision_id": updated_doc.get("latest_revision_id")},
+                                "ts": datetime.utcnow().isoformat(),
+                            })
+                        except Exception:
+                            pass
                         
                     except Exception as e:
                         logger.exception(f"处理content_update消息失败")

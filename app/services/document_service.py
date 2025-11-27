@@ -118,8 +118,19 @@ def _row_to_document_dict(row) -> Dict:
         'is_locked': row[8] if len(row) > 8 else None,
         'locked_by': row[9] if len(row) > 9 else None,
         'created_at': row[10] if len(row) > 10 else (row[9] if len(row) > 9 else None),
-        'updated_at': row[11] if len(row) > 11 else (row[10] if len(row) > 10 else None)
+        'updated_at': row[11] if len(row) > 11 else (row[10] if len(row) > 10 else None),
+        'latest_revision_id': None,
     }
+
+
+def get_latest_revision_id(db, document_id: int) -> Optional[int]:
+    rows = db.query(
+        f"SELECT id FROM {TABLE_DOCUMENT_REVISIONS} WHERE document_id = %s ORDER BY id DESC LIMIT 1",
+        (document_id,),
+    )
+    if not rows:
+        return None
+    return rows[0][0]
 
 
 def _row_to_template_dict(row) -> Dict:
@@ -195,7 +206,9 @@ def _get_document_by_id_and_owner(db, document_id: int, owner_id: int) -> Option
         f"WHERE id = {document_id} AND owner_id = {owner_id} LIMIT 1"
     )
     if rows:
-        return _row_to_document_dict(rows[0])
+        doc = _row_to_document_dict(rows[0])
+        doc["latest_revision_id"] = get_latest_revision_id(db, document_id)
+        return doc
     return None
 
 
@@ -516,15 +529,17 @@ def get_document_with_collaborators(db, document_id: int, user_id: int) -> Optio
     
     # 检查是否为协作者
     collab_rows = db.query(f"""
-        SELECT d.id, d.owner_id, d.title, d.content, d.status, d.folder_name, d.tags, 
-               d.is_locked, d.locked_by, d.created_at, d.updated_at 
+        SELECT d.id, d.owner_id, d.title, d.content, d.status, d.folder_name, d.tags,
+               d.is_locked, d.locked_by, d.created_at, d.updated_at
         FROM {TABLE_DOCUMENTS} d
         INNER JOIN document_collaborators dc ON d.id = dc.document_id
         WHERE d.id = {document_id} AND dc.user_id = {user_id}
     """)
-    
+
     if collab_rows:
-        return _row_to_document_dict(collab_rows[0])
+        doc = _row_to_document_dict(collab_rows[0])
+        doc["latest_revision_id"] = get_latest_revision_id(db, document_id)
+        return doc
     
     return None
 
@@ -905,15 +920,19 @@ def create_document(db, document_data_or_schema, owner_id: int) -> Optional[Dict
                     add_document_tags(db, doc.get('id'), [t.strip() for t in tags.split(',') if t.strip()])
                 except Exception as tag_err:
                     logger.warning("初始化文档标签失败: %s", tag_err)
+                try:
+                    create_revision_if_changed(
+                        db,
+                        doc.get('id'),
+                        doc.get('title'),
+                        doc.get('content', ''),
+                        owner_id,
+                        reason="create",
+                    )
+                except Exception:
+                    pass
             try:
-                create_revision_if_changed(
-                    db,
-                    doc.get('id'),
-                    doc.get('title'),
-                    doc.get('content', ''),
-                    owner_id,
-                    reason="create",
-                )
+                doc["latest_revision_id"] = get_latest_revision_id(db, doc.get("id"))
             except Exception:
                 pass
             return doc
@@ -1010,6 +1029,10 @@ def update_document(
                     )
                 except Exception:
                     pass
+            try:
+                updated_doc["latest_revision_id"] = get_latest_revision_id(db, document_id)
+            except Exception:
+                updated_doc["latest_revision_id"] = updated_doc.get("latest_revision_id")
             return updated_doc
         return None
     except Exception as e:

@@ -64,3 +64,10 @@ A portable runner is available at `scripts/run_backend_regression_ascii.bat`. It
 ## 8. Cleanup note
 
 Temporary outputs (logs/zips under `.tmp/`) are git-ignored and safe to delete after runs.
+
+## Mobile testing quickstart
+
+- After the API starts, open `http://localhost:8000/` on a mobile browser. Viewport and responsive styles are enabled via `/static/mobile.css`.
+- Use the floating “+” button to create a document, then open it to reach the Quill editor. Bottom toolbar and safe-area insets are tuned for touch.
+- Toggle airplane mode to verify offline drafts: edit content, go back online, and observe the sync banner plus conflict prompt if the server version changed.
+- Tap the bell icon to load notifications; use the filter drop-down to view unread items and tap an entry to mark it read.

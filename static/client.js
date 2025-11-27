@@ -181,6 +181,16 @@ class ApiClient {
         return this.request('/tags');
     }
 
+    async listNotifications(params = {}) {
+        const query = new URLSearchParams(params).toString();
+        const suffix = query ? `?${query}` : '';
+        return this.request(`/notifications${suffix}`);
+    }
+
+    async markNotificationRead(id) {
+        return this.request(`/notifications/${id}/read`, { method: 'PATCH' });
+    }
+
     // 锁定文档
     async lockDocument(id) {
         return this.request(`/documents/${id}/lock`, {
@@ -270,6 +280,45 @@ function showError(elementId, message) {
     setTimeout(() => {
         element.style.display = 'none';
     }, 5000);
+}
+
+async function loadNotifications() {
+    try {
+        const filter = document.getElementById('notif-filter')?.value;
+        const params = {};
+        if (filter === 'unread') params.unread = true;
+        const data = await api.listNotifications(params);
+        const listEl = document.getElementById('notification-list');
+        if (!listEl) return;
+        listEl.innerHTML = '';
+        (data.items || data.notifications || []).forEach(item => {
+            const div = document.createElement('div');
+            div.style.padding = '8px 0';
+            div.style.borderBottom = '1px solid #eee';
+            div.innerHTML = `<div style="font-weight:${item.is_read ? 'normal' : 'bold'}">${item.title || item.type}</div><div style="font-size:12px;color:#555;">${item.created_at}</div>`;
+            div.addEventListener('click', async () => {
+                await api.markNotificationRead(item.id);
+                loadNotifications();
+            });
+            listEl.appendChild(div);
+        });
+        const badge = document.getElementById('notif-count');
+        if (badge) {
+            const unread = (data.items || data.notifications || []).filter(n => !n.is_read).length;
+            badge.textContent = unread;
+            badge.style.display = unread > 0 ? 'inline-block' : 'none';
+        }
+    } catch (err) {
+        console.error('加载通知失败', err);
+    }
+}
+
+function toggleNotifications() {
+    const panel = document.getElementById('notification-panel');
+    if (!panel) return;
+    const visible = panel.style.display === 'block';
+    panel.style.display = visible ? 'none' : 'block';
+    if (!visible) loadNotifications();
 }
 
 function formatDate(dateString) {
@@ -797,6 +846,7 @@ async function checkAuthStatus() {
             showDocumentsSection();
             await loadDocuments();
             await loadFilters(); // 加载过滤器
+            loadNotifications();
         } catch (error) {
             // token 无效，清除并显示登录表单
             api.clearAuth();
@@ -841,6 +891,7 @@ document.addEventListener('DOMContentLoaded', function() {
             showDocumentsSection();
             await loadDocuments();
             await loadFilters(); // 加载过滤器
+            loadNotifications();
         } catch (error) {
             showError('login-error', error.message);
         }
@@ -860,6 +911,7 @@ document.addEventListener('DOMContentLoaded', function() {
             document.getElementById('current-username').textContent = username;
             showDocumentsSection();
             await loadDocuments();
+            loadNotifications();
         } catch (error) {
             showError('register-error', error.message);
         }
@@ -879,6 +931,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // 创建文档
     document.getElementById('create-document-btn').addEventListener('click', createNewDocument);
+    const fab = document.getElementById('fab-create');
+    if (fab) fab.addEventListener('click', createNewDocument);
 
     // 导入文档
     document.getElementById('import-document-btn').addEventListener('click', importDocument);

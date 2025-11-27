@@ -2,7 +2,9 @@
 <html lang="zh-CN">
 <head>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>多人协作文档编辑系统</title>
+    <link rel="stylesheet" href="/static/mobile.css">
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -286,8 +288,14 @@
         }
     </style>
 </head>
-<body>
-    <div class="container">
+<body class="mobile-container">
+    <div class="mobile-nav">
+        <h1>多人协作文档</h1>
+        <div class="nav-actions">
+            <div class="bell" onclick="toggleNotifications()">🔔<span id="notif-count" class="badge" style="display:none">0</span></div>
+        </div>
+    </div>
+    <div class="container card-list">
         <h1>多人协作文档编辑系统</h1>
         
         <!-- 登录表单 -->
@@ -344,7 +352,21 @@
                 欢迎，<span id="current-username"></span>
                 <button id="logout-btn" class="logout-btn btn-small">退出登录</button>
             </div>
-            
+
+            <div id="notification-panel" style="display:none; background:#fff; padding:12px; border-radius:8px; margin-bottom:12px; border:1px solid #eee;">
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+                    <strong>通知中心</strong>
+                    <div>
+                        <select id="notif-filter" style="min-height:32px;">
+                            <option value="">全部</option>
+                            <option value="unread">未读</option>
+                        </select>
+                        <button class="btn-small" onclick="loadNotifications()">刷新</button>
+                    </div>
+                </div>
+                <div id="notification-list" style="margin-top:10px;"></div>
+            </div>
+
             <h2>我的文档</h2>
             
             <!-- 共享给我的文档 -->
@@ -434,5 +456,6 @@
     </div>
 
     <script src="/static/client.js"></script>
+    <button id="fab-create" class="fab-create">+</button>
 </body>
 </html>

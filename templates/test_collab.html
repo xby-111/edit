@@ -2,9 +2,11 @@
 <html>
 <head>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>协作编辑器</title>
     <!-- Quill 编辑器 CSS -->
     <link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
+    <link rel="stylesheet" href="/static/mobile.css">
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -99,15 +101,24 @@
         #markdown-editor { display: none; }
     </style>
 </head>
-<body>
+<body class="mobile-container">
+    <div class="mobile-nav">
+        <h2>多人实时协作编辑器</h2>
+        <div class="nav-actions">
+            <div class="bell" id="mobile-sync-status">🔄</div>
+            <button id="back-to-documents" style="background-color: #2196F3; padding: 8px 12px; border: none; border-radius: 8px; color: white; cursor: pointer;">返回</button>
+        </div>
+    </div>
     <div class="container">
         <div class="header">
-            <h2>多人实时协作编辑器</h2>
-            <div>
+            <div style="display:flex; flex-wrap: wrap; gap:8px; align-items:center;">
                 <button id="rich-text-btn" class="mode-btn active">富文本</button>
                 <button id="markdown-btn" class="mode-btn">Markdown</button>
                 <button id="share-manage-btn" class="mode-btn" style="background-color: #4CAF50;">共享管理</button>
-                <button id="back-to-documents" style="background-color: #2196F3; padding: 8px 16px; border: none; border-radius: 4px; color: white; cursor: pointer; margin-left: 20px;">返回文档列表</button>
+            </div>
+            <div class="sync-actions">
+                <span id="sync-indicator" class="status-text">准备连接...</span>
+                <button id="manual-save" class="mode-btn" style="background:#2563eb; color:#fff;">保存/同步</button>
             </div>
         </div>
 
@@ -120,6 +131,29 @@
             </div>
             <div id="cursor-layer" style="position: relative; height: 0; pointer-events: none;"></div>
         </div>
+        <div id="quill-toolbar-wrapper">
+        <div id="quill-main-toolbar" class="mobile-toolbar">
+            <select class="ql-header">
+                <option value="1">H1</option>
+                <option value="2">H2</option>
+                <option selected></option>
+            </select>
+            <button class="ql-bold">B</button>
+            <button class="ql-italic">I</button>
+            <button class="ql-underline">U</button>
+            <button class="ql-list" value="ordered">1.</button>
+            <button class="ql-list" value="bullet">•</button>
+            <button id="more-toggle" aria-label="更多工具">···</button>
+        </div>
+        <div id="quill-more-toolbar" class="more-toolbar">
+            <select class="ql-font"></select>
+            <select class="ql-align"></select>
+            <select class="ql-color"></select>
+            <select class="ql-background"></select>
+            <button class="ql-code-block">代码</button>
+            <button class="ql-clean">清除</button>
+        </div>
+        </div>
 
         <div class="status">
             <div class="status-info">
@@ -131,6 +165,10 @@
             <div>
                 <button id="restore-draft-btn" class="draft-restore" style="display: none;">恢复本地草稿</button>
             </div>
+        </div>
+        <div class="sync-banner" id="sync-banner" style="display:none;">
+            <span id="sync-banner-text">同步中...</span>
+            <span id="sync-banner-extra"></span>
         </div>
 
         <div class="collab-layout">
@@ -189,6 +227,7 @@
     </div>
 
     <!-- Quill 编辑器 JS -->
+    <script src="/static/offline_drafts.js"></script>
     <script src="https://cdn.quilljs.com/1.3.6/quill.js"></script>
     <script>
         let currentMode = 'rich-text';
@@ -196,6 +235,11 @@
         let socket = null;
         let isRemoteUpdating = false;
         let onlineUsers = new Set();
+        let reconnectAttempts = 0;
+        let baseRevisionId = null;
+        let lastKnownTitle = '';
+        let heartbeatTimer = null;
+        let draftSaveTimer = null;
 
         const params = new URLSearchParams(window.location.search);
         const docId = parseInt(params.get('doc_id') || '1');
@@ -272,17 +316,9 @@
                 theme: 'snow',
                 placeholder: '开始编写内容...',
                 modules: {
-                    toolbar: [
-                        [{ 'header': [1, 2, 3, false] }],
-                        ['bold', 'italic', 'underline', 'strike'],
-                        ['blockquote', 'code-block'],
-                        [{ 'list': 'ordered'}, { 'list': 'bullet' }],
-                        [{ 'script': 'sub'}, { 'script': 'super' }],
-                        [{ 'indent': '-1'}, { 'indent': '+1' }],
-                        [{ 'color': [] }, { 'background': [] }],
-                        ['link', 'image'],
-                        ['clean'],
-                    ]
+                    toolbar: {
+                        container: '#quill-toolbar-wrapper'
+                    }
                 }
             });
 
@@ -308,45 +344,139 @@
             setTimeout(() => indicator.style.display = 'none', 2000);
         }
 
+        function updateSyncBanner(text, extra = '', tone = 'info') {
+            const banner = document.getElementById('sync-banner');
+            const textEl = document.getElementById('sync-banner-text');
+            const extraEl = document.getElementById('sync-banner-extra');
+            textEl.textContent = text;
+            extraEl.textContent = extra;
+            banner.style.display = 'flex';
+            banner.style.background = tone === 'error' ? '#fee2e2' : tone === 'warn' ? '#fef9c3' : '#e0f2fe';
+            banner.style.color = tone === 'error' ? '#991b1b' : tone === 'warn' ? '#92400e' : '#075985';
+        }
+
+        function hideSyncBanner() {
+            document.getElementById('sync-banner').style.display = 'none';
+        }
+
         function checkLocalDraft(documentId) {
-            const draftKey = `draft_${documentId}`;
-            const draft = localStorage.getItem(draftKey);
-            if (draft) {
-                const draftData = JSON.parse(draft);
-                const serverTime = localStorage.getItem(`server_time_${documentId}`) || 0;
-                if (draftData.timestamp > serverTime) {
+            const draftKey = `offline_draft_${username || 'guest'}_${documentId}`;
+            OfflineDrafts.loadDraft(draftKey).then(draft => {
+                if (draft && draft.content_delta) {
                     document.getElementById('draft-indicator').style.display = 'inline';
                     document.getElementById('restore-draft-btn').style.display = 'inline-block';
-                    return true;
                 }
-            }
+            });
             return false;
         }
 
         document.getElementById('restore-draft-btn').addEventListener('click', function() {
-            const draftKey = `draft_${docId}`;
-            const draft = localStorage.getItem(draftKey);
-            if (draft) {
-                const draftData = JSON.parse(draft);
-                setCurrentContent(draftData.content);
-                document.getElementById('draft-indicator').style.display = 'none';
-                document.getElementById('restore-draft-btn').style.display = 'none';
-                localStorage.removeItem(draftKey);
-                alert('本地草稿已恢复');
-            }
+            const draftKey = `offline_draft_${username || 'guest'}_${docId}`;
+            OfflineDrafts.loadDraft(draftKey).then(draft => {
+                if (draft) {
+                    setCurrentContent(draft.content_delta);
+                    baseRevisionId = draft.base_revision_id || baseRevisionId;
+                    document.getElementById('draft-indicator').style.display = 'none';
+                    document.getElementById('restore-draft-btn').style.display = 'none';
+                    OfflineDrafts.deleteDraft(draftKey);
+                    alert('本地草稿已恢复');
+                }
+            });
         });
 
         function saveLocalDraft(documentId, content) {
-            const draftKey = `draft_${documentId}`;
-            const draftData = { content: content, timestamp: Date.now() };
-            localStorage.setItem(draftKey, JSON.stringify(draftData));
+            const draftKey = `offline_draft_${username || 'guest'}_${documentId}`;
+            const payload = {
+                doc_id: documentId,
+                user_id: username || 'guest',
+                content_delta: content,
+                updated_at_local: Date.now(),
+                base_revision_id: baseRevisionId,
+                dirty: true,
+                title: lastKnownTitle
+            };
+            OfflineDrafts.saveDraft(draftKey, payload);
         }
 
         function autoSaveSetup() {
             window.autoSave = function() {
-                const currentContent = getCurrentContent();
-                saveLocalDraft(docId, currentContent);
+                clearTimeout(draftSaveTimer);
+                draftSaveTimer = setTimeout(() => {
+                    const currentContent = getCurrentContent();
+                    saveLocalDraft(docId, currentContent);
+                }, 3000);
             };
+        }
+
+        async function fetchLatestDocument(forceRender = false) {
+            try {
+                const res = await fetch(`/api/v1/documents/${docId}`, { headers: { 'Content-Type': 'application/json', ...authHeader } });
+                if (!res.ok) return;
+                const data = await res.json();
+                lastKnownTitle = data.title;
+                baseRevisionId = data.latest_revision_id || baseRevisionId;
+                if (forceRender) {
+                    isRemoteUpdating = true;
+                    setCurrentContent(data.content || '');
+                    isRemoteUpdating = false;
+                }
+                hideSyncBanner();
+            } catch (err) {
+                console.error('拉取文档失败', err);
+            }
+        }
+
+        async function attemptSyncDraft() {
+            const draftKey = `offline_draft_${username || 'guest'}_${docId}`;
+            const draft = await OfflineDrafts.loadDraft(draftKey);
+            if (!draft || !draft.dirty) return;
+
+            try {
+                const res = await fetch(`/api/v1/documents/${docId}`, { headers: { 'Content-Type': 'application/json', ...authHeader } });
+                if (!res.ok) return;
+                const remote = await res.json();
+                const serverRev = remote.latest_revision_id;
+
+                if (draft.base_revision_id && serverRev && draft.base_revision_id !== serverRev) {
+                    const choice = prompt('检测到离线草稿与服务器不一致，输入 1 覆盖服务器 / 2 复制为新文档 / 3 放弃草稿', '1');
+                    if (choice === '1') {
+                        await fetch(`/api/v1/documents/${docId}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json', ...authHeader },
+                            body: JSON.stringify({ content: draft.content_delta })
+                        });
+                        await OfflineDrafts.deleteDraft(draftKey);
+                        await fetchLatestDocument(true);
+                    } else if (choice === '2') {
+                        await fetch('/api/v1/documents', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', ...authHeader },
+                            body: JSON.stringify({ title: `${remote.title || '离线草稿'}(offline copy)`, content: draft.content_delta })
+                        });
+                        await OfflineDrafts.deleteDraft(draftKey);
+                    } else {
+                        await OfflineDrafts.deleteDraft(draftKey);
+                    }
+                    return;
+                }
+
+                const syncRes = await fetch(`/api/v1/documents/${docId}/sync`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...authHeader },
+                    body: JSON.stringify({ content: draft.content_delta, base_revision_id: draft.base_revision_id })
+                });
+                if (syncRes.status === 409) {
+                    updateSyncBanner('同步冲突', '请手动选择策略', 'warn');
+                    return;
+                }
+                if (syncRes.ok) {
+                    baseRevisionId = (await syncRes.json()).revision_id || baseRevisionId;
+                    await OfflineDrafts.deleteDraft(draftKey);
+                    hideSyncBanner();
+                }
+            } catch (err) {
+                console.error('同步离线草稿失败', err);
+            }
         }
 
         function connectWebSocket() {
@@ -355,28 +485,48 @@
             socket = new WebSocket(wsUrl);
 
             socket.onopen = () => {
+                reconnectAttempts = 0;
                 updateStatus('已连接');
                 document.getElementById('editing-tip').textContent = '你正在编辑文档';
+                updateSyncBanner('在线', '实时同步启用');
+                fetchLatestDocument(true);
+                if (heartbeatTimer) clearInterval(heartbeatTimer);
+                heartbeatTimer = setInterval(() => {
+                    if (socket && socket.readyState === WebSocket.OPEN) {
+                        socket.send(JSON.stringify({ type: 'pong', payload: { ts: Date.now() } }));
+                    }
+                }, 25000);
             };
 
             socket.onerror = (e) => {
                 console.error('WebSocket错误:', e);
                 updateStatus('连接出错');
+                updateSyncBanner('连接异常', '稍后重试', 'warn');
             };
-            
+
             socket.onclose = (e) => {
                 console.log('WebSocket关闭:', e.code, e.reason);
                 updateStatus('连接已关闭');
-                // 清理socket引用
                 socket = null;
+                const delay = Math.min(20000, 1000 * Math.pow(2, reconnectAttempts));
+                reconnectAttempts += 1;
+                updateSyncBanner('正在重连', `将在 ${Math.round(delay / 1000)}s 后重试`, 'warn');
+                setTimeout(connectWebSocket, delay);
             };
 
             socket.onmessage = (event) => {
                 const msg = JSON.parse(event.data || '{}');
+                if (msg.type === 'ping') {
+                    if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'pong' }));
+                    return;
+                }
+                if (msg.type === 'sync_ack' && msg.payload?.revision_id) {
+                    baseRevisionId = msg.payload.revision_id;
+                    hideSyncBanner();
+                }
                 if (msg.type === 'presence') {
                     if (msg.action === 'init' && Array.isArray(msg.online_users)) {
                         onlineUsers = new Set(msg.online_users);
-                        // 显示详细的在线用户信息
                         if (msg.online_users_info && Array.isArray(msg.online_users_info)) {
                             console.log('在线用户详情:', msg.online_users_info);
                         }
@@ -387,25 +537,22 @@
                     return;
                 }
 
-                // 处理初始化消息
                 if (msg.type === 'init' && msg.payload?.html !== undefined) {
                     isRemoteUpdating = true;
                     setCurrentContent(msg.payload.html);
                     saveLocalDraft(docId, msg.payload.html);
-                    
-                    // 处理权限信息
+                    baseRevisionId = msg.payload.revision_id || baseRevisionId;
+
                     if (msg.permissions) {
                         const permissions = msg.permissions;
                         const canEdit = permissions.can_edit;
                         const isOwner = permissions.is_owner;
-                        
-                        // 更新编辑器状态
+
                         if (quillEditor) {
                             quillEditor.enable(canEdit);
                         }
                         document.getElementById('markdown-textarea').disabled = !canEdit;
-                        
-                        // 更新状态提示
+
                         if (isOwner) {
                             document.getElementById('editing-tip').textContent = '你是文档所有者，可以编辑和管理协作者';
                         } else if (canEdit) {
@@ -413,14 +560,13 @@
                         } else {
                             document.getElementById('editing-tip').textContent = '你是查看者，只能查看文档内容';
                         }
-                        
-                        // 显示/隐藏共享管理按钮
+
                         const shareBtn = document.getElementById('share-manage-btn');
                         if (shareBtn) {
                             shareBtn.style.display = isOwner ? 'inline-block' : 'none';
                         }
                     }
-                    
+
                     isRemoteUpdating = false;
                     return;
                 }
@@ -429,6 +575,7 @@
                     if (msg.user === username) return;
                     isRemoteUpdating = true;
                     setCurrentContent(msg.payload.html);
+                    baseRevisionId = msg.payload.revision_id || baseRevisionId;
                     saveLocalDraft(docId, msg.payload.html);
                     isRemoteUpdating = false;
                     return;
@@ -439,7 +586,6 @@
                     return;
                 }
 
-                // 处理错误消息
                 if (msg.type === 'error' && msg.payload?.message) {
                     alert(msg.payload.message);
                     return;
@@ -448,8 +594,13 @@
         }
 
         function sendContentUpdate(html) {
-            if (!socket || socket.readyState !== WebSocket.OPEN) return;
-            socket.send(JSON.stringify({ type: 'content_update', payload: { html } }));
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                updateSyncBanner('同步中', '实时保存...');
+                socket.send(JSON.stringify({ type: 'content_update', payload: { html } }));
+            } else {
+                updateSyncBanner('离线编辑', '内容已保存到本地', 'warn');
+                saveLocalDraft(docId, html);
+            }
         }
 
         function sendCursor(range) {
@@ -457,6 +608,32 @@
             const index = range?.index || 0;
             const length = range?.length || 0;
             socket.send(JSON.stringify({ type: 'cursor', payload: { index, length } }));
+        }
+
+        async function manualSync() {
+            const content = getCurrentContent();
+            updateSyncBanner('手动同步中', '正在保存...');
+            try {
+                const res = await fetch(`/api/v1/documents/${docId}/sync`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...authHeader },
+                    body: JSON.stringify({ content, base_revision_id: baseRevisionId })
+                });
+                if (res.status === 409) {
+                    updateSyncBanner('同步冲突', '请刷新后选择合适的版本', 'warn');
+                    return;
+                }
+                if (res.ok) {
+                    const data = await res.json();
+                    baseRevisionId = data.revision_id || baseRevisionId;
+                    hideSyncBanner();
+                    showSaveIndicator();
+                    await OfflineDrafts.deleteDraft(`offline_draft_${username || 'guest'}_${docId}`);
+                }
+            } catch (err) {
+                console.error('手动同步失败', err);
+                updateSyncBanner('同步失败', '请稍后重试', 'error');
+            }
         }
 
         async function fetchComments() {
@@ -542,6 +719,26 @@
         document.getElementById('close-share-modal').addEventListener('click', hideShareModal);
         document.getElementById('add-collaborator').addEventListener('click', addCollaborator);
         document.getElementById('batch-add-collaborators').addEventListener('click', batchAddCollaborators);
+        document.getElementById('manual-save').addEventListener('click', manualSync);
+        document.getElementById('more-toggle').addEventListener('click', () => {
+            document.getElementById('quill-more-toolbar').classList.toggle('active');
+        });
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible' && (!socket || socket.readyState !== WebSocket.OPEN)) {
+                connectWebSocket();
+                fetchLatestDocument(true);
+            }
+        });
+
+        window.addEventListener('online', () => {
+            updateSyncBanner('回到在线', '准备同步');
+            connectWebSocket();
+            attemptSyncDraft();
+        });
+        window.addEventListener('offline', () => {
+            updateSyncBanner('离线模式', '编辑内容将暂存', 'warn');
+        });
 
         // 共享管理函数
         function showShareModal() {
@@ -707,6 +904,8 @@
             autoSaveSetup();
             checkLocalDraft(docId);
             connectWebSocket();
+            fetchLatestDocument(true);
+            attemptSyncDraft();
             fetchComments();
             fetchTasks();
         });

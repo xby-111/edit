@@ -41,6 +41,7 @@ from app.services.document_service import (
     get_document,
     get_document_versions,
     get_revision,
+    get_latest_revision_id,
     get_documents,
     get_folders,
     get_tags,
@@ -90,6 +91,11 @@ class FolderOut(BaseModel):
     name: str
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+
+
+class DocumentSyncPayload(BaseModel):
+    content: str
+    base_revision_id: Optional[int] = None
 
 
 # ==================== 工具函数 ====================
@@ -961,7 +967,8 @@ async def get_document_endpoint(
         is_locked=document.get('is_locked', False),
         locked_by=document.get('locked_by'),
         created_at=document['created_at'],
-        updated_at=document['updated_at']
+        updated_at=document['updated_at'],
+        latest_revision_id=document.get('latest_revision_id'),
     )
 
 
@@ -1033,7 +1040,8 @@ async def update_document_endpoint(
             is_locked=updated_document.get('is_locked', False),
             locked_by=updated_document.get('locked_by'),
             created_at=updated_document['created_at'],
-            updated_at=updated_document['updated_at']
+            updated_at=updated_document['updated_at'],
+            latest_revision_id=updated_document.get('latest_revision_id'),
         )
     except HTTPException:
         raise
@@ -1042,10 +1050,54 @@ async def update_document_endpoint(
         raise HTTPException(status_code=500, detail="更新文档失败")
 
 
+@router.post("/documents/{document_id}/sync", summary="带版本校验的文档同步")
+async def sync_document_endpoint(
+    document_id: int,
+    payload: DocumentSyncPayload,
+    current_user=Depends(get_current_user),
+    db=Depends(get_db),
+):
+    from app.services.document_service import get_document_with_collaborators, check_document_permission
+
+    document = get_document_with_collaborators(db, document_id, current_user.id)
+    if not document:
+        raise HTTPException(status_code=404, detail="文档不存在或无权限")
+
+    permission = check_document_permission(db, document_id, current_user.id)
+    if not permission["can_edit"]:
+        raise HTTPException(status_code=403, detail="无编辑权限")
+
+    latest_revision_id = get_latest_revision_id(db, document_id)
+    if payload.base_revision_id is not None and latest_revision_id is not None:
+        if payload.base_revision_id != latest_revision_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"server_revision_id": latest_revision_id},
+            )
+
+    updated_document = update_document(
+        db,
+        document_id,
+        DocumentUpdate(content=payload.content),
+        current_user.id,
+        revision_reason="sync",
+        create_revision=True,
+    )
+    if not updated_document:
+        raise HTTPException(status_code=404, detail="文档不存在")
+
+    new_revision_id = get_latest_revision_id(db, document_id)
+    updated_document["latest_revision_id"] = new_revision_id
+    return {
+        "document": Document(**updated_document),
+        "revision_id": new_revision_id,
+    }
+
+
 @router.delete("/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT, summary="删除文档", description="删除指定的文档")
 async def delete_document_endpoint(
     document_id: int,
-    current_user = Depends(get_current_user), 
+    current_user = Depends(get_current_user),
     db = Depends(get_db)
 ):
     """删除文档"""
