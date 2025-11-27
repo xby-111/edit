@@ -4,6 +4,8 @@
 本模块提供文档、文档版本、模板等相关的数据库操作服务。
 所有函数都使用原生 SQL 与 py-opengauss 进行交互。
 """
+import difflib
+import hashlib
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -11,6 +13,7 @@ from typing import Dict, List, Optional
 from fastapi import HTTPException
 
 from app.schemas import DocumentCreate, DocumentUpdate, TemplateCreate, TemplateUpdate
+from app.services.audit_service import log_action
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +23,7 @@ logger = logging.getLogger(__name__)
 TABLE_DOCUMENTS = "documents"
 TABLE_DOCUMENT_VERSIONS = "document_versions"
 TABLE_DOCUMENT_TEMPLATES = "document_templates"
+TABLE_DOCUMENT_REVISIONS = "document_revisions"
 
 # 文档状态
 STATUS_ACTIVE = "active"
@@ -36,6 +40,9 @@ TEMPLATE_FIELDS = "id, name, description, content, category, is_active, created_
 
 # 版本字段列表
 VERSION_FIELDS = "id, document_id, user_id, version_number, content_snapshot, summary, created_at"
+
+# 版本历史字段
+REVISION_FIELDS = "id, document_id, created_at, created_by, title, content, content_hash, reason"
 
 
 # ==================== 私有辅助函数 ====================
@@ -134,6 +141,19 @@ def _row_to_template_dict(row) -> Dict:
         'is_active': row[5],
         'created_at': row[6],
         'updated_at': row[7]
+    }
+
+
+def _row_to_revision_dict(row) -> Dict:
+    return {
+        'id': row[0],
+        'document_id': row[1],
+        'created_at': row[2],
+        'created_by': row[3],
+        'title': row[4],
+        'content': row[5],
+        'content_hash': row[6],
+        'reason': row[7],
     }
 
 
@@ -885,6 +905,17 @@ def create_document(db, document_data_or_schema, owner_id: int) -> Optional[Dict
                     add_document_tags(db, doc.get('id'), [t.strip() for t in tags.split(',') if t.strip()])
                 except Exception as tag_err:
                     logger.warning("初始化文档标签失败: %s", tag_err)
+            try:
+                create_revision_if_changed(
+                    db,
+                    doc.get('id'),
+                    doc.get('title'),
+                    doc.get('content', ''),
+                    owner_id,
+                    reason="create",
+                )
+            except Exception:
+                pass
             return doc
         
         logger.warning("创建文档后无法查询到新文档，owner_id=%s", owner_id)
@@ -894,7 +925,15 @@ def create_document(db, document_data_or_schema, owner_id: int) -> Optional[Dict
         raise
 
 
-def update_document(db, document_id: int, document_update, user_id: int) -> Optional[Dict]:
+def update_document(
+    db,
+    document_id: int,
+    document_update,
+    user_id: int,
+    *,
+    revision_reason: str = "update",
+    create_revision: bool = True,
+) -> Optional[Dict]:
     """
     更新文档（支持所有者或协作者更新）
     
@@ -958,7 +997,20 @@ def update_document(db, document_id: int, document_update, user_id: int) -> Opti
         # 返回更新后的文档
         updated_rows = db.query(f"SELECT {DOCUMENT_FIELDS} FROM {TABLE_DOCUMENTS} WHERE id = %s LIMIT 1", (document_id,))
         if updated_rows:
-            return _row_to_document_dict(updated_rows[0])
+            updated_doc = _row_to_document_dict(updated_rows[0])
+            if create_revision:
+                try:
+                    create_revision_if_changed(
+                        db,
+                        document_id,
+                        updated_doc.get("title"),
+                        updated_doc.get("content", ""),
+                        user_id,
+                        reason=revision_reason,
+                    )
+                except Exception:
+                    pass
+            return updated_doc
         return None
     except Exception as e:
         logger.error("更新文档失败，document_id=%s: %s", document_id, e, exc_info=True)
@@ -1319,6 +1371,139 @@ def get_document_version_count(db, document_id: int) -> int:
     if rows:
         return rows[0][0]
     return 0
+
+
+# ==================== 文档历史版本（修订）相关函数 ====================
+
+
+def _compute_content_hash(content: str) -> str:
+    return hashlib.sha256((content or "").encode("utf-8")).hexdigest()
+
+
+def create_revision_if_changed(
+    db,
+    document_id: int,
+    title: Optional[str],
+    content: str,
+    user_id: Optional[int],
+    reason: Optional[str] = None,
+):
+    """若内容有变更则记录修订版本，按 content_hash 去重。"""
+
+    content_hash = _compute_content_hash(content)
+    try:
+        last_row = db.query(
+            f"SELECT content_hash FROM {TABLE_DOCUMENT_REVISIONS} WHERE document_id = %s ORDER BY created_at DESC, id DESC LIMIT 1",
+            (document_id,),
+        )
+        if last_row and last_row[0][0] == content_hash:
+            return None
+
+        db.execute(
+            f"""
+            INSERT INTO {TABLE_DOCUMENT_REVISIONS} (document_id, created_by, title, content, content_hash, reason)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            (document_id, user_id, title, content, content_hash, reason),
+        )
+        return content_hash
+    except Exception as e:
+        logger.warning("创建文档修订失败，document_id=%s: %s", document_id, e)
+        return None
+
+
+def list_revisions(db, document_id: int, limit: int = 50, offset: int = 0) -> List[Dict]:
+    rows = db.query(
+        f"SELECT {REVISION_FIELDS} FROM {TABLE_DOCUMENT_REVISIONS} WHERE document_id = %s ORDER BY created_at DESC, id DESC LIMIT %s OFFSET %s",
+        (document_id, limit, offset),
+    )
+    return [_row_to_revision_dict(row) for row in rows]
+
+
+def get_revision(db, document_id: int, revision_id: int) -> Optional[Dict]:
+    rows = db.query(
+        f"SELECT {REVISION_FIELDS} FROM {TABLE_DOCUMENT_REVISIONS} WHERE document_id = %s AND id = %s LIMIT 1",
+        (document_id, revision_id),
+    )
+    if rows:
+        return _row_to_revision_dict(rows[0])
+    return None
+
+
+def diff_revisions(db, document_id: int, from_revision_id: int, to_revision_id: int) -> str:
+    from_rev = get_revision(db, document_id, from_revision_id)
+    to_rev = get_revision(db, document_id, to_revision_id)
+    if not from_rev or not to_rev:
+        raise HTTPException(status_code=404, detail="修订不存在")
+
+    from_lines = (from_rev.get("content") or "").splitlines()
+    to_lines = (to_rev.get("content") or "").splitlines()
+    diff_lines = difflib.unified_diff(
+        from_lines,
+        to_lines,
+        fromfile=f"rev_{from_revision_id}",
+        tofile=f"rev_{to_revision_id}",
+        lineterm="",
+    )
+    return "\n".join(diff_lines)
+
+
+def rollback_to_revision(db, document_id: int, revision_id: int, user, request=None) -> Optional[Dict]:
+    assert_document_access(db, document_id, user, required_role="editor")
+
+    current_doc = get_document_with_collaborators(db, document_id, getattr(user, "id", 0))
+    if not current_doc:
+        raise HTTPException(status_code=404, detail="文档不存在")
+
+    target_revision = get_revision(db, document_id, revision_id)
+    if not target_revision:
+        raise HTTPException(status_code=404, detail="修订不存在")
+
+    create_revision_if_changed(
+        db,
+        document_id,
+        current_doc.get("title"),
+        current_doc.get("content", ""),
+        getattr(user, "id", None),
+        reason="rollback_pre",
+    )
+
+    update_data = DocumentUpdate(
+        title=target_revision.get("title") or current_doc.get("title"),
+        content=target_revision.get("content"),
+    )
+    updated_document = update_document(
+        db,
+        document_id,
+        update_data,
+        getattr(user, "id", 0),
+        revision_reason="rollback_applied",
+        create_revision=False,
+    )
+
+    create_revision_if_changed(
+        db,
+        document_id,
+        updated_document.get("title") if updated_document else target_revision.get("title"),
+        target_revision.get("content", ""),
+        getattr(user, "id", None),
+        reason="rollback_applied",
+    )
+
+    try:
+        log_action(
+            db,
+            user_id=getattr(user, "id", None),
+            action="document.rollback",
+            resource_type="document",
+            resource_id=document_id,
+            request=request,
+            meta={"to_revision": revision_id},
+        )
+    except Exception:
+        pass
+
+    return updated_document
 
 
 # ==================== 模板相关函数 ====================
