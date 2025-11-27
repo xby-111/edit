@@ -7,8 +7,12 @@ from datetime import datetime
 from typing import List, Optional
 from urllib.parse import quote
 
+import io
+import json
+import os
+import zipfile
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from app.core.security import get_current_user
@@ -22,15 +26,21 @@ from app.schemas import (
     Template,
     TemplateCreate,
     TemplateUpdate,
+    RevisionSummary,
+    RevisionDetail,
+    BatchExportRequest,
+    ImportResult,
 )
 from app.services.document_service import (
     create_document,
     create_document_version,
+    create_revision_if_changed,
     create_template,
     delete_document,
     delete_template,
     get_document,
     get_document_versions,
+    get_revision,
     get_documents,
     get_folders,
     get_tags,
@@ -52,6 +62,10 @@ from app.services.document_service import (
     delete_document_tag,
     check_document_permission,
     is_document_owner,
+    list_revisions,
+    diff_revisions,
+    rollback_to_revision,
+    assert_document_access,
 )
 from app.services.audit_service import log_action, log_user_event
 from app.services.settings_service import is_feature_enabled
@@ -475,53 +489,76 @@ async def export_document_endpoint(
             pass
         raise HTTPException(status_code=403, detail="导出功能已禁用")
 
-    # 先检查文档是否存在且用户有权限
-    document = get_document(db, document_id, current_user.id)
+    assert_document_access(db, document_id, current_user, required_role="viewer")
+
+    document = get_document_with_collaborators(db, document_id, current_user.id)
     if not document:
         raise HTTPException(status_code=404, detail="文档不存在")
-    
+
     try:
         content = document.get('content', '')
-        title = document.get('title', '文档')
-        
-        if format.lower() == 'markdown':
-            # 简单的 HTML 到 Markdown 转换
+        fmt = format.lower()
+        filename_map = {
+            "markdown": "md",
+            "html": "html",
+            "txt": "txt",
+            "json": "json",
+        }
+        if fmt not in filename_map:
+            raise HTTPException(status_code=400, detail="不支持的导出格式")
+
+        log_action(
+            db,
+            user_id=current_user.id,
+            action="export.request",
+            resource_type="document",
+            resource_id=document_id,
+            request=request,
+            meta={"format": fmt},
+        )
+
+        ascii_name = f"document_{document_id}.{filename_map[fmt]}"
+        cd = f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(ascii_name)}'
+
+        if fmt == 'markdown':
             markdown_content = htmlToMarkdown(content)
-            log_action(
-                db,
-                user_id=current_user.id,
-                action="export.request",
-                resource_type="document",
-                resource_id=document_id,
-                request=request,
-                meta={"format": "markdown"},
-            )
-            ascii_name = f"document_{document_id}.md"
-            cd = f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(ascii_name)}'
             return Response(
                 content=markdown_content,
                 media_type="text/markdown",
                 headers={"Content-Disposition": cd}
             )
-        elif format.lower() == 'html':
-            log_action(
-                db,
-                user_id=current_user.id,
-                action="export.request",
-                resource_type="document",
-                resource_id=document_id,
-                request=request,
-                meta={"format": "html"},
-            )
-            ascii_name = f"document_{document_id}.html"
-            cd = f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(ascii_name)}'
+        if fmt == 'html':
             return Response(
                 content=content,
                 media_type="text/html",
                 headers={"Content-Disposition": cd}
             )
-        else:
-            raise HTTPException(status_code=400, detail="不支持的导出格式")
+        if fmt == 'txt':
+            return Response(
+                content=content,
+                media_type="text/plain",
+                headers={"Content-Disposition": cd}
+            )
+
+        payload = {
+            'id': document.get('id'),
+            'owner_id': document.get('owner_id'),
+            'title': document.get('title'),
+            'content': document.get('content'),
+            'status': document.get('status'),
+            'folder_name': document.get('folder_name'),
+            'folder_id': document.get('folder_id'),
+            'tags': document.get('tags'),
+            'is_locked': document.get('is_locked'),
+            'locked_by': document.get('locked_by'),
+            'created_at': document.get('created_at'),
+            'updated_at': document.get('updated_at'),
+        }
+        return Response(
+            content=json.dumps(payload, ensure_ascii=False),
+            media_type="application/json",
+            headers={"Content-Disposition": cd},
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -529,52 +566,291 @@ async def export_document_endpoint(
         raise HTTPException(status_code=500, detail="导出文档失败")
 
 
-@router.post("/documents/import", summary="导入文档", description="从上传的文件创建新文档")
+@router.get(
+    "/documents/{document_id}/revisions",
+    response_model=List[RevisionSummary],
+    summary="列出文档修订历史",
+)
+async def list_document_revisions(
+    document_id: int,
+    limit: int = 50,
+    offset: int = 0,
+    current_user = Depends(get_current_user),
+    db = Depends(get_db),
+):
+    assert_document_access(db, document_id, current_user, required_role="viewer")
+    revisions = list_revisions(db, document_id, limit=limit, offset=offset)
+    for rev in revisions:
+        hash_value = rev.get("content_hash")
+        rev["content_hash"] = hash_value[:12] if hash_value else hash_value
+    return [RevisionSummary(**rev) for rev in revisions]
+
+
+@router.get(
+    "/documents/{document_id}/revisions/{revision_id}",
+    response_model=RevisionDetail,
+    summary="获取文档修订详情",
+)
+async def get_document_revision(
+    document_id: int,
+    revision_id: int,
+    current_user = Depends(get_current_user),
+    db = Depends(get_db),
+):
+    assert_document_access(db, document_id, current_user, required_role="viewer")
+    revision = get_revision(db, document_id, revision_id)
+    if not revision:
+        raise HTTPException(status_code=404, detail="修订不存在")
+    return RevisionDetail(**revision)
+
+
+@router.get("/documents/{document_id}/revisions/diff", summary="对比修订差异")
+async def diff_document_revisions(
+    document_id: int,
+    from_revision: int,
+    to_revision: int,
+    current_user = Depends(get_current_user),
+    db = Depends(get_db),
+):
+    assert_document_access(db, document_id, current_user, required_role="viewer")
+    diff_text = diff_revisions(db, document_id, from_revision, to_revision)
+    return {"diff": diff_text}
+
+
+@router.post(
+    "/documents/{document_id}/revisions/{revision_id}/rollback",
+    response_model=Document,
+    summary="回滚到指定修订",
+)
+async def rollback_document_revision(
+    document_id: int,
+    revision_id: int,
+    current_user = Depends(get_current_user),
+    db = Depends(get_db),
+    request: Request = None,
+):
+    updated_document = rollback_to_revision(db, document_id, revision_id, current_user, request=request)
+    if not updated_document:
+        raise HTTPException(status_code=404, detail="回滚失败")
+    return Document(
+        id=updated_document['id'],
+        owner_id=updated_document['owner_id'],
+        title=updated_document['title'],
+        content=updated_document['content'],
+        status=updated_document['status'],
+        folder_name=updated_document.get('folder_name'),
+        folder_id=updated_document.get('folder_id'),
+        tags=updated_document.get('tags'),
+        is_locked=updated_document.get('is_locked', False),
+        locked_by=updated_document.get('locked_by'),
+        created_at=updated_document['created_at'],
+        updated_at=updated_document['updated_at']
+    )
+
+
+@router.post("/documents/export/batch", summary="批量导出文档为压缩包")
+async def batch_export_documents(
+    payload: BatchExportRequest,
+    current_user = Depends(get_current_user),
+    db = Depends(get_db),
+    request: Request = None,
+):
+    if not is_feature_enabled(db, "feature.export.enabled", True):
+        try:
+            log_action(
+                db,
+                user_id=current_user.id,
+                action="export.batch.blocked",
+                resource_type="document",
+                resource_id=None,
+                request=request,
+                meta={"reason": "feature.export.enabled=false"},
+            )
+        except Exception:
+            pass
+        raise HTTPException(status_code=403, detail="导出功能已禁用")
+
+    fmt = payload.format.lower()
+    filename_map = {
+        "markdown": "md",
+        "html": "html",
+        "txt": "txt",
+        "json": "json",
+    }
+    if fmt not in filename_map:
+        raise HTTPException(status_code=400, detail="不支持的导出格式")
+
+    if len(payload.document_ids) > 50:
+        raise HTTPException(status_code=400, detail="批量导出数量过多")
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for doc_id in payload.document_ids:
+            assert_document_access(db, doc_id, current_user, required_role="viewer")
+            document = get_document_with_collaborators(db, doc_id, current_user.id)
+            if not document:
+                raise HTTPException(status_code=404, detail=f"文档 {doc_id} 不存在")
+
+            file_name = f"doc_{doc_id}.{filename_map[fmt]}"
+            content = document.get("content", "")
+            if fmt == "markdown":
+                file_body = htmlToMarkdown(content)
+            elif fmt == "html":
+                file_body = content
+            elif fmt == "txt":
+                file_body = content
+            else:
+                payload_json = {
+                    'id': document.get('id'),
+                    'owner_id': document.get('owner_id'),
+                    'title': document.get('title'),
+                    'content': document.get('content'),
+                    'status': document.get('status'),
+                    'folder_name': document.get('folder_name'),
+                    'folder_id': document.get('folder_id'),
+                    'tags': document.get('tags'),
+                    'is_locked': document.get('is_locked'),
+                    'locked_by': document.get('locked_by'),
+                    'created_at': document.get('created_at'),
+                    'updated_at': document.get('updated_at'),
+                }
+                file_body = json.dumps(payload_json, ensure_ascii=False)
+
+            zf.writestr(file_name, file_body)
+
+    try:
+        log_action(
+            db,
+            user_id=current_user.id,
+            action="export.batch.request",
+            resource_type="document",
+            resource_id=None,
+            request=request,
+            meta={"format": fmt, "count": len(payload.document_ids)},
+        )
+    except Exception:
+        pass
+
+    buffer.seek(0)
+    headers = {
+        "Content-Disposition": 'attachment; filename="documents_export.zip"; filename*=UTF-8\'\'documents_export.zip'
+    }
+    return StreamingResponse(buffer, media_type="application/zip", headers=headers)
+
+
+@router.post("/documents/import", response_model=ImportResult, summary="导入文档", description="从上传的文件创建新文档")
 async def import_document_endpoint(
-    title: str = Form(...),
     file: UploadFile = File(...),
-    current_user = Depends(get_current_user), 
+    folder_id: Optional[int] = Form(None),
+    title: Optional[str] = Form(None),
+    current_user = Depends(get_current_user),
     db = Depends(get_db)
 ):
-    """导入文档"""
+    """导入文档（支持单文件和zip批量）。"""
+    MAX_SIZE = 10 * 1024 * 1024
+    ALLOWED_EXTS = {".txt", ".md", ".html", ".json"}
+    MAX_FILES = 50
+
+    raw_content = await file.read()
+    if len(raw_content) > MAX_SIZE:
+        raise HTTPException(status_code=400, detail="文件过大")
+
+    created = []
+    skipped = []
+    errors = []
+
+    def _parse_file(filename: str, data: bytes):
+        name = os.path.basename(filename)
+        ext = os.path.splitext(name)[1].lower()
+        if ext not in ALLOWED_EXTS:
+            skipped.append(name)
+            return None
+        text = data.decode("utf-8", errors="replace")
+        doc_title = title or os.path.splitext(name)[0][:200]
+        content_body = text
+        if ext == ".html":
+            content_body = text
+        elif ext in {".md", ".txt"}:
+            content_body = text
+        elif ext == ".json":
+            try:
+                payload = json.loads(text)
+                doc_title = payload.get("title") or doc_title
+                content_body = payload.get("content") or text
+            except Exception:
+                content_body = text
+        return doc_title, content_body
+
+    files_to_process = []
+    if file.filename and file.filename.lower().endswith(".zip"):
+        try:
+            with zipfile.ZipFile(io.BytesIO(raw_content)) as zf:
+                for info in zf.infolist():
+                    if info.is_dir():
+                        continue
+                    if len(files_to_process) >= MAX_FILES:
+                        break
+                    path_name = info.filename
+                    normalized = os.path.normpath(path_name)
+                    if normalized.startswith("..") or os.path.isabs(normalized):
+                        skipped.append(path_name)
+                        continue
+                    data = zf.read(info)
+                    parsed = _parse_file(os.path.basename(normalized), data)
+                    if parsed:
+                        files_to_process.append(parsed)
+        except zipfile.BadZipFile:
+            raise HTTPException(status_code=400, detail="无效的ZIP文件")
+    else:
+        parsed = _parse_file(file.filename, raw_content)
+        if parsed:
+            files_to_process.append(parsed)
+
+    for doc_title, content_body in files_to_process:
+        try:
+            document_data = {
+                'title': doc_title,
+                'content': content_body,
+                'status': 'active',
+                'folder_id': folder_id,
+            }
+            new_document = create_document(db, document_data, current_user.id)
+            create_revision_if_changed(
+                db,
+                new_document.get('id'),
+                new_document.get('title'),
+                new_document.get('content', ''),
+                current_user.id,
+                reason="import",
+            )
+            created.append({"id": new_document.get("id"), "title": new_document.get("title")})
+            try:
+                log_action(
+                    db,
+                    user_id=current_user.id,
+                    action="import.created",
+                    resource_type="document",
+                    resource_id=new_document.get("id"),
+                    meta={"title": new_document.get("title")},
+                )
+            except Exception:
+                pass
+        except Exception as e:
+            errors.append(str(e))
+
     try:
-        # 读取文件内容
-        content = await file.read()
-        
-        # 根据文件类型处理内容
-        if file.filename.endswith('.md') or file.filename.endswith('.txt'):
-            # Markdown 或纯文本文件，直接使用
-            text_content = content.decode('utf-8')
-            html_content = markdownToHtml(text_content)
-        elif file.filename.endswith('.html'):
-            # HTML 文件，直接使用
-            html_content = content.decode('utf-8')
-        else:
-            # 其他文件类型，作为纯文本处理
-            text_content = content.decode('utf-8')
-            html_content = f"<p>{text_content.replace(chr(10), '<br>')}</p>"
-        
-        # 创建文档
-        document_data = {
-            'title': title,
-            'content': html_content,
-            'status': 'active'
-        }
-        
-        new_document = create_document(db, document_data, current_user.id)
-        
-        return {
-            "id": new_document['id'],
-            "title": new_document['title'],
-            "message": "文档导入成功"
-        }
-    except UnicodeDecodeError:
-        raise HTTPException(status_code=400, detail="文件编码错误，请使用 UTF-8 编码的文件")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("导入文档失败: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail="导入文档失败")
+        log_action(
+            db,
+            user_id=current_user.id,
+            action="import.request",
+            resource_type="document",
+            resource_id=None,
+            meta={"count": len(created)},
+        )
+    except Exception:
+        pass
+
+    return ImportResult(created=created, skipped=skipped, errors=errors)
 
 
 # ==================== 文档 CRUD 相关路由 ====================

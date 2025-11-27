@@ -237,6 +237,65 @@ def check_and_create_notifications_table():
     return True
 
 
+def check_and_create_document_revisions_table():
+    """检查并创建 document_revisions 表（幂等）。"""
+    conn = get_db_connection()
+
+    try:
+        table_result = conn.query(
+            """
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_name = 'document_revisions'
+            """
+        )
+
+        if not table_result:
+            print("document_revisions 表不存在，开始创建...")
+            create_sql = """
+                CREATE TABLE IF NOT EXISTS document_revisions (
+                    id BIGSERIAL PRIMARY KEY,
+                    document_id BIGINT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    created_by BIGINT NULL,
+                    title TEXT NULL,
+                    content TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    reason TEXT NULL
+                )
+                """
+            _append_sql("document_revisions.sql", create_sql)
+            conn.execute(create_sql)
+        else:
+            print("✅ document_revisions 表已存在")
+
+        indexes = {
+            "idx_document_revisions_doc_created_at": "CREATE INDEX idx_document_revisions_doc_created_at ON document_revisions(document_id, created_at DESC)",
+            "idx_document_revisions_doc_hash": "CREATE INDEX idx_document_revisions_doc_hash ON document_revisions(document_id, content_hash)",
+        }
+
+        for name, sql in indexes.items():
+            idx = conn.query(
+                """
+                SELECT indexname FROM pg_indexes
+                WHERE tablename = 'document_revisions' AND indexname = %s
+                """,
+                (name,),
+            )
+            if not idx:
+                _append_sql("document_revisions.sql", sql)
+                conn.execute(sql)
+                print(f"✅ 已创建索引 {name}")
+            else:
+                print(f"✅ 索引 {name} 已存在")
+
+    except Exception as e:
+        print(f"❌ 创建 document_revisions 表时出错: {e}")
+        return False
+
+    return True
+
+
 def check_and_create_document_tags_table():
     """创建 document_tags 表（幂等）。"""
     conn = get_db_connection()
@@ -857,8 +916,9 @@ def main():
     success13 = check_and_update_tasks_table()
     success14 = check_and_create_user_events()
     success15 = check_and_create_satisfaction_surveys_table()
+    success16 = check_and_create_document_revisions_table()
 
-    if all([success1, success2, success3, success4, success5, success6, success7, success8, success9, success10, success11, success12, success13, success14, success15]):
+    if all([success1, success2, success3, success4, success5, success6, success7, success8, success9, success10, success11, success12, success13, success14, success15, success16]):
         print("🎉 数据库自检完成")
     else:
         print("💥 数据库自检失败")

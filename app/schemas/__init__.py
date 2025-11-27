@@ -105,6 +105,19 @@ class Document(DocumentBase):
     class Config:
         from_attributes = True
 
+
+class RevisionSummary(BaseModel):
+    id: int
+    created_at: Optional[datetime] = None
+    created_by: Optional[int] = None
+    reason: Optional[str] = None
+    content_hash: Optional[str] = None
+    title: Optional[str] = None
+
+
+class RevisionDetail(RevisionSummary):
+    content: Optional[str] = None
+
 # DocumentVersion schemas
 class DocumentVersionBase(BaseModel):
     document_id: int
@@ -125,6 +138,17 @@ class DocumentVersion(DocumentVersionBase):
 
     class Config:
         from_attributes = True
+
+
+class BatchExportRequest(BaseModel):
+    document_ids: List[int]
+    format: Literal['markdown', 'html', 'txt', 'json'] = "html"
+
+
+class ImportResult(BaseModel):
+    created: List[dict]
+    skipped: List[str]
+    errors: List[str]
 
 # Template schemas
 class TemplateBase(BaseModel):
