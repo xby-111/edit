@@ -7,6 +7,7 @@ from app.core.security import get_password_hash
 from datetime import datetime
 import random
 from datetime import timedelta
+import secrets
 
 logger = logging.getLogger(__name__)
 
@@ -287,6 +288,7 @@ def delete_user(db, user_id: int):
     db.execute("DELETE FROM users WHERE id = %s", (user_id,))
     return True
 
+
 def update_user_password(db, user_id: int, new_password: str):
     """更新用户密码 - 使用参数化查询"""
     user = get_user(db, user_id)
@@ -408,5 +410,48 @@ def verify_verification_code(db, user_id: int, code: str) -> bool:
     # 检查验证码是否过期
     if expires_dt < datetime.utcnow():
         return False
-    
+
     return True
+
+
+def generate_password_reset_token(db, user_id: int, expires_minutes: int = 30) -> str:
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.utcnow() + timedelta(minutes=expires_minutes)
+    db.execute(
+        """
+        INSERT INTO password_reset_tokens (user_id, token, expires_at, created_at)
+        VALUES (%s, %s, %s, %s)
+        """,
+        (user_id, token, expires_at, datetime.utcnow()),
+    )
+    return token
+
+
+def get_password_reset_token(db, token: str):
+    rows = db.query(
+        """
+        SELECT id, user_id, token, expires_at, used_at, created_at
+        FROM password_reset_tokens
+        WHERE token = %s
+        LIMIT 1
+        """,
+        (token,),
+    )
+    if not rows:
+        return None
+    row = rows[0]
+    return {
+        "id": row[0],
+        "user_id": row[1],
+        "token": row[2],
+        "expires_at": row[3],
+        "used_at": row[4],
+        "created_at": row[5],
+    }
+
+
+def mark_password_reset_used(db, token: str):
+    db.execute(
+        "UPDATE password_reset_tokens SET used_at = %s WHERE token = %s",
+        (datetime.utcnow(), token),
+    )

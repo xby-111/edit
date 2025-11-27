@@ -2,18 +2,24 @@
 用户管理路由
 """
 import logging
-from fastapi import APIRouter, Depends, HTTPException, status
+import os
+from pathlib import Path
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from typing import List
 from app.core.security import get_current_user
 from app.db.session import get_db
-from app.schemas import User, UserUpdate
-from app.services.user_service import get_user, update_user, delete_user
+from app.schemas import User, UserUpdate, UserProfileUpdate
+from app.services.user_service import get_user, update_user, delete_user, update_user_profile
+from app.services.audit_service import log_action
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["用户管理"])
 
-def log_operation(db, user_id: int, action: str, resource_type: str = None, 
+UPLOAD_DIR = Path("uploads")
+UPLOAD_DIR.mkdir(exist_ok=True)
+
+def log_operation(db, user_id: int, action: str, resource_type: str = None,
                   resource_id: int = None, description: str = None, 
                   ip_address: str = None, user_agent: str = None):
     """记录操作日志的辅助函数"""
@@ -29,6 +35,37 @@ def log_operation(db, user_id: int, action: str, resource_type: str = None,
     except Exception as e:
         logger.error(f"记录操作日志失败: {e}", exc_info=True)
         # 日志记录失败不应该影响主业务，只记录错误
+
+
+@router.patch("/users/me", response_model=User, summary="更新个人资料")
+def patch_me(profile: UserProfileUpdate, current_user: User = Depends(get_current_user), db=Depends(get_db)):
+    updated = update_user_profile(db, current_user.id, profile)
+    if not updated:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    try:
+        log_action(db, user_id=current_user.id, action="user.profile.update", resource_type="user", resource_id=current_user.id)
+    except Exception:
+        pass
+    return updated
+
+
+@router.post("/users/me/avatar", summary="上传头像")
+async def upload_avatar(file: UploadFile = File(...), current_user: User = Depends(get_current_user), db=Depends(get_db)):
+    filename = f"user_{current_user.id}_{file.filename}"
+    filepath = UPLOAD_DIR / filename
+    try:
+        with open(filepath, "wb") as f:
+            f.write(await file.read())
+        avatar_url = str(filepath)
+        update_user_profile(db, current_user.id, type("obj", (), {"avatar_url": avatar_url})())
+        try:
+            log_action(db, user_id=current_user.id, action="user.avatar.upload", resource_type="user", resource_id=current_user.id)
+        except Exception:
+            pass
+        return {"avatar_url": avatar_url}
+    except Exception as e:
+        logger.error("上传头像失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="上传失败")
 
 @router.get("/users/{user_id}", response_model=User, summary="获取用户信息", description="根据用户ID获取用户详细信息")
 def read_user(user_id: int, current_user: User = Depends(get_current_user), db = Depends(get_db)):

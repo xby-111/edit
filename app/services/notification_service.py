@@ -22,6 +22,74 @@ def _row_to_notification(row) -> Dict:
     }
 
 
+def get_notification_settings(db, user_id: int) -> Dict:
+    rows = db.query(
+        """
+        SELECT user_id, mute_all, mute_types, updated_at
+        FROM notification_settings
+        WHERE user_id = %s
+        LIMIT 1
+        """,
+        (user_id,),
+    )
+    if not rows:
+        return {"user_id": user_id, "mute_all": False, "mute_types": []}
+
+    mute_types_raw = rows[0][2]
+    try:
+        mute_types = json.loads(mute_types_raw) if mute_types_raw else []
+    except Exception:
+        mute_types = []
+
+    return {
+        "user_id": rows[0][0],
+        "mute_all": bool(rows[0][1]),
+        "mute_types": mute_types or [],
+        "updated_at": rows[0][3],
+    }
+
+
+def upsert_notification_settings(db, user_id: int, mute_all: bool, mute_types: Optional[List[str]] = None) -> Dict:
+    mute_types = mute_types or []
+    mute_types_str = json.dumps(mute_types)
+    try:
+        affected = db.execute(
+            """
+            UPDATE notification_settings
+            SET mute_all = %s, mute_types = %s, updated_at = now()
+            WHERE user_id = %s
+            """,
+            (mute_all, mute_types_str, user_id),
+        )
+        if affected is not None and affected == 0:
+            raise RuntimeError("no rows updated")
+    except Exception:
+        # 如果没有受影响行，则尝试插入
+        db.execute(
+            """
+            INSERT INTO notification_settings (user_id, mute_all, mute_types, updated_at)
+            VALUES (%s, %s, %s, now())
+            ON CONFLICT (user_id) DO NOTHING
+            """,
+            (user_id, mute_all, mute_types_str),
+        )
+    return get_notification_settings(db, user_id)
+
+
+def _is_muted(db, user_id: int, notif_type: str) -> bool:
+    try:
+        settings = get_notification_settings(db, user_id)
+    except Exception as e:
+        logger.warning("读取通知设置失败，忽略静音: %s", e)
+        return False
+
+    if settings.get("mute_all"):
+        return True
+
+    mute_types = settings.get("mute_types") or []
+    return notif_type in mute_types
+
+
 def create_notification(
     db,
     user_id: int,
@@ -30,6 +98,8 @@ def create_notification(
     content: Optional[str] = None,
     payload: Optional[dict] = None,
 ) -> Optional[Dict]:
+    if _is_muted(db, user_id, type):
+        return None
     payload_str = json.dumps(payload) if payload is not None else None
     # openGauss可能不支持RETURNING，使用INSERT后查询的方式
     db.execute(
@@ -86,8 +156,8 @@ def list_notifications(
     user_id: int,
     notif_type: Optional[str] = None,
     unread: Optional[bool] = None,
-    page: int = 1,
-    page_size: int = 20,
+    limit: int = 20,
+    offset: int = 0,
 ) -> Dict:
     filters = ["user_id = %s"]
     params: List = [user_id]
@@ -97,10 +167,8 @@ def list_notifications(
         params.append(notif_type)
 
     if unread is not None:
-        # unread=True 表示查询未读（is_read=False）
-        # unread=False 表示查询已读（is_read=True）
         filters.append("is_read = %s")
-        params.append(not unread)  # 取反：unread=True -> is_read=False, unread=False -> is_read=True
+        params.append(not unread)
 
     where_clause = " AND ".join(filters)
     count_rows = db.query(
@@ -109,8 +177,7 @@ def list_notifications(
     )
     total = count_rows[0][0] if count_rows else 0
 
-    offset = (page - 1) * page_size
-    params_with_paging = params + [page_size, offset]
+    params_with_paging = params + [limit, offset]
     rows = db.query(
         f"""
         SELECT id, user_id, type, title, content, payload, is_read, created_at, COALESCE(updated_at, created_at) as updated_at
@@ -122,10 +189,11 @@ def list_notifications(
         tuple(params_with_paging),
     )
 
+    page = offset // max(limit, 1) + 1
     return {
         "items": [_row_to_notification(row) for row in rows] if rows else [],
         "page": page,
-        "page_size": page_size,
+        "page_size": limit,
         "total": total,
     }
 
@@ -165,7 +233,7 @@ def mark_notifications_read_batch(db, notification_ids: List[int], user_id: int)
     db.execute(
         f"""
         UPDATE notifications
-        SET is_read = TRUE
+        SET is_read = TRUE, updated_at = now()
         WHERE user_id = %s AND id IN ({placeholders})
         """,
         tuple(params),

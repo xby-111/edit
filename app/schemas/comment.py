@@ -5,6 +5,9 @@ from datetime import datetime
 
 class CommentBase(BaseModel):
     content: str
+    anchor_json: Optional[str] = None
+    parent_id: Optional[int] = None
+    mentions: Optional[str] = None
 
 
 class CommentCreate(CommentBase):

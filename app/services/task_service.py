@@ -74,9 +74,15 @@ def create_task(
 
 
 def update_task(db, task_id: int, status: Optional[str] = None, due_at: Optional[str] = None, assignee_id: Optional[int] = None) -> Dict:
+    existing_rows = db.query(
+        f"SELECT status FROM tasks WHERE id = {task_id}"
+    )
+    previous_status = existing_rows[0][0] if existing_rows else None
     set_clauses = []
     if status is not None:
         set_clauses.append(f"status = {_escape(status)}")
+        if status.upper() == "DONE":
+            set_clauses.append(f"completed_at = '{datetime.utcnow()}'")
     if due_at is not None:
         set_clauses.append(f"due_at = {_escape(due_at)}")
     if assignee_id is not None:
@@ -103,4 +109,7 @@ def update_task(db, task_id: int, status: Optional[str] = None, due_at: Optional
         LIMIT 1
         """
     )
-    return _row_to_task(rows[0]) if rows else {}
+    task = _row_to_task(rows[0]) if rows else {}
+    if task is not None:
+        task["previous_status"] = previous_status
+    return task

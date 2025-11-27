@@ -28,3 +28,14 @@ class NotificationListResponse(BaseModel):
 
 class NotificationReadBatchRequest(BaseModel):
     ids: List[int] = Field(default_factory=list)
+
+
+class NotificationSettings(BaseModel):
+    mute_all: bool = False
+    mute_types: List[str] = Field(default_factory=list)
+    updated_at: Optional[datetime] = None
+
+
+class NotificationSettingsUpdate(BaseModel):
+    mute_all: Optional[bool] = False
+    mute_types: Optional[List[str]] = None
