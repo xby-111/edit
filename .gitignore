@@ -4,3 +4,10 @@ venv/
 venv/
 __pycache__/
 *.pyc
+
+# Local artifacts
+.tmp/
+*.log
+*_logs_*
+*.zip
+.env

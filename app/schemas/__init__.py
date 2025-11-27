@@ -1,4 +1,4 @@
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, field_validator, model_validator, validator
 from datetime import datetime
 from typing import Optional, List, Literal
 from pydantic import EmailStr
@@ -9,7 +9,7 @@ class UserBase(BaseModel):
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
     is_active: Optional[bool] = True
-    role: Literal['admin', 'user'] | None = "user"
+    role: Literal['admin', 'user', 'editor', 'viewer'] | None = "user"
 
 class UserCreate(UserBase):
     password: str
@@ -26,11 +26,25 @@ class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
     is_active: Optional[bool] = None
-    role: Literal['admin', 'user'] | None = None
+    role: Literal['admin', 'user', 'editor', 'viewer'] | None = None
     full_name: Optional[str] = None
     bio: Optional[str] = None
     address: Optional[str] = None
     avatar_url: Optional[str] = None
+
+
+class UserProfileUpdate(BaseModel):
+    nickname: Optional[str] = None
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = None
+    full_name: Optional[str] = None
+    bio: Optional[str] = None
+
+    @validator("phone")
+    def validate_phone(cls, v):
+        if v and not v.isdigit():
+            raise ValueError("手机号必须为数字")
+        return v
 
 class User(UserBase):
     id: int
@@ -48,6 +62,15 @@ class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
 
+
+class PasswordForgotRequest(BaseModel):
+    identifier: str
+
+
+class PasswordResetRequest(BaseModel):
+    token: str
+    new_password: str
+
 class TokenData(BaseModel):
     username: Optional[str] = None
 
@@ -57,6 +80,7 @@ class DocumentBase(BaseModel):
     content: Optional[str] = ""
     status: Literal['active', 'archived', 'draft', 'deleted'] | None = "active"
     folder_name: Optional[str] = None
+    folder_id: Optional[int] = None
     tags: Optional[str] = None
 
 class DocumentCreate(DocumentBase):
@@ -67,6 +91,7 @@ class DocumentUpdate(BaseModel):
     content: Optional[str] = None
     status: Optional[str] = None
     folder_name: Optional[str] = None
+    folder_id: Optional[int] = None
     tags: Optional[str] = None
 
 class Document(DocumentBase):

@@ -36,3 +36,18 @@ def log_action(
     except Exception:
         # 审计失败不阻断业务，尽量静默
         return None
+
+
+def log_user_event(conn, *, user_id: Optional[int], event_type: str, document_id: Optional[int] = None, meta: Optional[dict] = None):
+    """记录用户行为事件，失败不影响主流程。"""
+    try:
+        meta_json = json.dumps(meta) if meta is not None else None
+        conn.execute(
+            """
+            INSERT INTO user_events (user_id, event_type, document_id, meta, created_at)
+            VALUES (%s, %s, %s, %s, now())
+            """,
+            (user_id, event_type, document_id, meta_json),
+        )
+    except Exception:
+        return None

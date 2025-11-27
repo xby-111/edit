@@ -3,11 +3,13 @@
 """
 import logging
 import re
+from datetime import datetime
 from typing import List, Optional
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import Response
+from pydantic import BaseModel
 
 from app.core.security import get_current_user
 from app.db.session import get_db
@@ -44,10 +46,14 @@ from app.services.document_service import (
     remove_collaborator,
     get_collaborators,
     get_shared_documents,
+    list_documents_for_user,
+    add_document_tags,
+    list_document_tags,
+    delete_document_tag,
     check_document_permission,
     is_document_owner,
 )
-from app.services.audit_service import log_action
+from app.services.audit_service import log_action, log_user_event
 from app.services.settings_service import is_feature_enabled
 from app.services.comment_service import create_comment, list_comments
 from app.services.task_service import create_task, list_tasks, update_task
@@ -57,7 +63,31 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["文档管理"])
 
 
+class DocumentTagPayload(BaseModel):
+    tags: List[str]
+
+
+class FolderCreatePayload(BaseModel):
+    name: str
+
+
+class FolderOut(BaseModel):
+    id: int
+    name: str
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
 # ==================== 工具函数 ====================
+
+
+def _parse_iso_dt(value: Optional[str]) -> Optional[datetime]:
+    if value is None:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except Exception:
+        raise HTTPException(status_code=422, detail="日期格式无效")
 
 def htmlToMarkdown(html: str) -> str:
     """简单的 HTML 到 Markdown 转换"""
@@ -139,14 +169,54 @@ def markdownToHtml(markdown: str) -> str:
 
 @router.get("/documents", response_model=List[Document], summary="获取文档列表", description="获取当前用户拥有的文档列表")
 async def get_documents_endpoint(
-    current_user = Depends(get_current_user), 
+    current_user = Depends(get_current_user),
     db = Depends(get_db),
     skip: int = 0,
     limit: int = 100,
-    folder: Optional[str] = None
+    folder: Optional[str] = None,
+    folder_id: Optional[int] = None,
+    q: Optional[str] = None,
+    keyword: Optional[str] = None,
+    tag: Optional[str] = None,
+    owner: Optional[int] = None,
+    sort: str = "updated_at",
+    created_from: Optional[str] = None,
+    created_to: Optional[str] = None,
+    updated_from: Optional[str] = None,
+    updated_to: Optional[str] = None,
+    author: Optional[str] = None,
 ):
     """获取当前用户拥有的文档列表"""
-    documents = get_documents(db, current_user.id, skip=skip, limit=limit, folder=folder)
+    if owner is not None and owner != current_user.id:
+        if getattr(current_user, "role", "user") != "admin":
+            raise HTTPException(status_code=403, detail="无权查看其他用户文档")
+
+    if sort not in ["created_at", "updated_at", "title"]:
+        raise HTTPException(status_code=400, detail="sort 仅支持 created_at/updated_at/title")
+
+    created_from_dt = _parse_iso_dt(created_from)
+    created_to_dt = _parse_iso_dt(created_to)
+    updated_from_dt = _parse_iso_dt(updated_from)
+    updated_to_dt = _parse_iso_dt(updated_to)
+
+    documents = list_documents_for_user(
+        db,
+        current_user.id,
+        skip=skip,
+        limit=limit,
+        folder=folder,
+        folder_id=folder_id,
+        status=None,
+        tag=tag,
+        keyword=keyword or q,
+        owner=owner,
+        sort=sort,
+        created_from=created_from_dt,
+        created_to=created_to_dt,
+        updated_from=updated_from_dt,
+        updated_to=updated_to_dt,
+        author=author,
+    )
     return documents
 
 
@@ -174,24 +244,144 @@ async def search_documents_endpoint(
     return documents
 
 
-@router.get("/folders", response_model=List[str], summary="获取文件夹列表", description="获取用户的所有文件夹")
+@router.get("/folders", response_model=List[FolderOut], summary="获取文件夹列表", description="获取用户的所有文件夹")
 async def get_folders_endpoint(
-    current_user = Depends(get_current_user), 
+    current_user = Depends(get_current_user),
     db = Depends(get_db)
 ):
-    """获取文件夹列表"""
     folders = get_folders(db, current_user.id)
     return folders
 
 
+@router.post("/folders", response_model=FolderOut, summary="创建文件夹")
+async def create_folder_endpoint(payload: FolderCreatePayload, current_user=Depends(get_current_user), db=Depends(get_db)):
+    from app.services.document_service import create_folder
+
+    folder = create_folder(db, current_user.id, payload.name)
+    try:
+        log_action(
+            db,
+            user_id=current_user.id,
+            action="folder.create",
+            resource_type="folder",
+            resource_id=folder.get("id"),
+            meta={"name": payload.name},
+        )
+    except Exception:
+        pass
+    return folder
+
+
+@router.patch("/folders/{folder_id}", response_model=FolderOut, summary="重命名文件夹")
+async def rename_folder_endpoint(folder_id: int, payload: FolderCreatePayload, current_user=Depends(get_current_user), db=Depends(get_db)):
+    from app.services.document_service import rename_folder
+
+    folder = rename_folder(db, current_user.id, folder_id, payload.name)
+    if not folder:
+        raise HTTPException(status_code=404, detail="文件夹不存在")
+    try:
+        log_action(
+            db,
+            user_id=current_user.id,
+            action="folder.rename",
+            resource_type="folder",
+            resource_id=folder_id,
+            meta={"name": payload.name},
+        )
+    except Exception:
+        pass
+    return folder
+
+
+@router.delete("/folders/{folder_id}", status_code=204, summary="删除文件夹")
+async def delete_folder_endpoint(folder_id: int, current_user=Depends(get_current_user), db=Depends(get_db)):
+    from app.services.document_service import delete_folder
+
+    delete_folder(db, current_user.id, folder_id)
+    try:
+        log_action(
+            db,
+            user_id=current_user.id,
+            action="folder.delete",
+            resource_type="folder",
+            resource_id=folder_id,
+        )
+    except Exception:
+        pass
+    return Response(status_code=204)
+
+
 @router.get("/tags", response_model=List[str], summary="获取标签列表", description="获取用户的所有标签")
 async def get_tags_endpoint(
-    current_user = Depends(get_current_user), 
+    current_user = Depends(get_current_user),
     db = Depends(get_db)
 ):
     """获取标签列表"""
     tags = get_tags(db, current_user.id)
     return tags
+
+
+@router.get("/documents/{document_id}/tags", response_model=List[str], summary="获取文档标签")
+async def get_document_tags_endpoint(
+    document_id: int,
+    current_user=Depends(get_current_user),
+    db=Depends(get_db),
+):
+    from app.services.document_service import get_document_with_collaborators, assert_document_access
+
+    document = get_document_with_collaborators(db, document_id, current_user.id)
+    if not document:
+        raise HTTPException(status_code=404, detail="文档不存在或无权限")
+    assert_document_access(db, document_id, current_user, required_role="editor")
+
+    try:
+        return list_document_tags(db, document_id)
+    except Exception as e:
+        logger.error("获取文档标签失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="获取文档标签失败")
+
+
+@router.post("/documents/{document_id}/tags", response_model=List[str], summary="添加文档标签")
+async def add_document_tags_endpoint(
+    document_id: int,
+    payload: DocumentTagPayload,
+    current_user=Depends(get_current_user),
+    db=Depends(get_db),
+):
+    from app.services.document_service import get_document_with_collaborators, assert_document_access
+
+    document = get_document_with_collaborators(db, document_id, current_user.id)
+    if not document:
+        raise HTTPException(status_code=404, detail="文档不存在或无权限")
+    assert_document_access(db, document_id, current_user, required_role="editor")
+
+    try:
+        return add_document_tags(db, document_id, payload.tags)
+    except Exception as e:
+        logger.error("添加标签失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="添加标签失败")
+
+
+@router.delete("/documents/{document_id}/tags/{tag}", summary="删除文档标签")
+async def delete_document_tag_endpoint(
+    document_id: int,
+    tag: str,
+    current_user=Depends(get_current_user),
+    db=Depends(get_db),
+):
+    from app.services.document_service import get_document_with_collaborators, assert_document_access
+
+    document = get_document_with_collaborators(db, document_id, current_user.id)
+    if not document:
+        raise HTTPException(status_code=404, detail="文档不存在或无权限")
+    assert_document_access(db, document_id, current_user, required_role="editor")
+
+    try:
+        delete_document_tag(db, document_id, tag)
+        return {"tags": list_document_tags(db, document_id)}
+    except Exception as e:
+        logger.error("删除标签失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="删除标签失败")
 
 
 # ==================== 文档锁定/解锁相关路由 ====================
@@ -271,6 +461,18 @@ async def export_document_endpoint(
 ):
     """导出文档"""
     if not is_feature_enabled(db, "feature.export.enabled", True):
+        try:
+            log_action(
+                db,
+                user_id=current_user.id,
+                action="export.blocked",
+                resource_type="document",
+                resource_id=document_id,
+                request=request,
+                meta={"reason": "feature.export.enabled=false"},
+            )
+        except Exception:
+            pass
         raise HTTPException(status_code=403, detail="导出功能已禁用")
 
     # 先检查文档是否存在且用户有权限
@@ -396,6 +598,13 @@ async def create_document_endpoint(
                 resource_id=new_document.get("id"),
                 request=request,
             )
+            log_user_event(
+                db,
+                user_id=current_user.id,
+                event_type="document.create",
+                document_id=new_document.get("id"),
+                meta={"title": new_document.get("title")},
+            )
         except Exception:
             pass
 
@@ -503,13 +712,40 @@ async def update_document_endpoint(
     # 检查文档是否被锁定
     if document.get('is_locked') and document.get('locked_by') != current_user.id:
         raise HTTPException(status_code=403, detail="文档已被锁定，无法编辑")
-    
+
     try:
+        update_data = document_update.model_dump(exclude_unset=True) if hasattr(document_update, "model_dump") else {}
         # 使用实际操作者ID进行更新（update_document函数参数已改为user_id）
         updated_document = update_document(db, document_id, document_update, current_user.id)
         if not updated_document:
             raise HTTPException(status_code=404, detail="文档不存在")
-        
+
+        try:
+            if 'content' in update_data and document.get('owner_id') and document.get('owner_id') != current_user.id:
+                from app.services.notification_service import create_notification
+
+                create_notification(
+                    db,
+                    user_id=document.get('owner_id'),
+                    type="edit",
+                    title="文档内容已更新",
+                    content=updated_document.get('title'),
+                    payload={"document_id": document_id},
+                )
+        except Exception as notify_err:
+            logger.warning("内容更新通知失败: %s", notify_err)
+
+        try:
+            log_user_event(
+                db,
+                user_id=current_user.id,
+                event_type="document.update",
+                document_id=document_id,
+                meta={"fields": list(update_data.keys())},
+            )
+        except Exception:
+            pass
+
         return Document(
             id=updated_document['id'],
             owner_id=updated_document['owner_id'],
@@ -722,10 +958,8 @@ async def get_document_comments(
     db=Depends(get_db)
 ):
     # 先校验文档存在且用户有权限
-    from app.services.document_service import check_document_permission
-    permission = check_document_permission(db, document_id, current_user.id)
-    if not permission["can_view"]:
-        raise HTTPException(status_code=403, detail="文档不存在或无权访问")
+    from app.services.document_service import assert_document_access
+    assert_document_access(db, document_id, current_user, required_role="editor")
     
     try:
         return list_comments(db, document_id)
@@ -743,12 +977,11 @@ async def create_document_comment(
     request: Request = None,
 ):
     # 先校验文档存在且用户有权限
-    from app.services.document_service import check_document_permission
-    permission = check_document_permission(db, document_id, current_user.id)
-    if not permission["can_view"]:
-        raise HTTPException(status_code=403, detail="文档不存在或无权访问")
-        
+    from app.services.document_service import assert_document_access
+    assert_document_access(db, document_id, current_user, required_role="viewer")
+
     try:
+        document = get_document_with_collaborators(db, document_id, current_user.id)
         comment = create_comment(
             db,
             document_id,
@@ -758,6 +991,7 @@ async def create_document_comment(
             None,
             None,
             None,
+            comment_in.anchor_json or comment_in.anchor,
         )
         try:
             log_action(
@@ -771,6 +1005,54 @@ async def create_document_comment(
             )
         except Exception:
             pass
+        try:
+            log_user_event(
+                db,
+                user_id=current_user.id,
+                event_type="comment.create",
+                document_id=document_id,
+                meta={"comment_id": getattr(comment, 'id', None) if hasattr(comment, 'id') else comment.get("id") if isinstance(comment, dict) else None},
+            )
+        except Exception:
+            pass
+        try:
+            from app.services.notification_service import create_notification
+
+            owner_id = document.get("owner_id") if isinstance(document, dict) else None
+            comment_id = comment.get("id") if isinstance(comment, dict) else getattr(comment, "id", None)
+            notified = set()
+
+            if owner_id and owner_id != current_user.id:
+                notification = create_notification(
+                    db,
+                    user_id=owner_id,
+                    type="comment",
+                    title="你的文档有新评论",
+                    content=comment_in.content,
+                    payload={"document_id": document_id, "comment_id": comment_id},
+                )
+                if notification:
+                    notified.add(owner_id)
+
+            # mention 通知
+            mention_candidates = set(re.findall(r"@([A-Za-z0-9_]+)", comment_in.content or ""))
+            for username in mention_candidates:
+                rows = db.query("SELECT id FROM users WHERE username = %s LIMIT 1", (username,))
+                if not rows:
+                    continue
+                target_id = rows[0][0]
+                if target_id in notified or target_id == current_user.id:
+                    continue
+                create_notification(
+                    db,
+                    user_id=target_id,
+                    type="comment",
+                    title=f"你被提及于文档评论",
+                    content=comment_in.content,
+                    payload={"document_id": document_id, "comment_id": comment_id},
+                )
+        except Exception as notify_err:
+            logger.warning("创建评论通知失败: %s", notify_err)
         return comment
     except Exception as e:
         logger.error("创建评论失败: %s", e, exc_info=True)
@@ -779,11 +1061,8 @@ async def create_document_comment(
 
 @router.get("/documents/{document_id}/tasks", response_model=List[Task], summary="获取文档任务")
 async def get_document_tasks(document_id: int, current_user=Depends(get_current_user), db=Depends(get_db)):
-    # 先校验文档存在且用户有权限
-    from app.services.document_service import check_document_permission
-    permission = check_document_permission(db, document_id, current_user.id)
-    if not permission["can_view"]:
-        raise HTTPException(status_code=403, detail="文档不存在或无权访问")
+    from app.services.document_service import assert_document_access
+    assert_document_access(db, document_id, current_user, required_role="viewer")
         
     try:
         return list_tasks(db, document_id)
@@ -800,11 +1079,8 @@ async def create_document_task(
     db=Depends(get_db),
     request: Request = None,
 ):
-    # 先校验文档存在且用户有权限（需要编辑权限才能创建任务）
-    from app.services.document_service import check_document_permission
-    permission = check_document_permission(db, document_id, current_user.id)
-    if not permission["can_edit"]:
-        raise HTTPException(status_code=403, detail="无编辑权限，无法创建任务")
+    from app.services.document_service import assert_document_access
+    assert_document_access(db, document_id, current_user, required_role="editor")
 
     try:
         assignee_id = getattr(task_in, 'assignee_id', None) or getattr(task_in, 'assigned_to', None)
@@ -827,6 +1103,16 @@ async def create_document_task(
                 resource_id=document_id,
                 request=request,
                 meta={"task_id": task.get("id") if isinstance(task, dict) else getattr(task, "id", None)},
+            )
+        except Exception:
+            pass
+        try:
+            log_user_event(
+                db,
+                user_id=current_user.id,
+                event_type="task.create",
+                document_id=document_id,
+                meta={"task_id": task.get("id")},
             )
         except Exception:
             pass
@@ -874,14 +1160,53 @@ async def update_task_endpoint(
     document_id = task_rows[0][0]
     
     # 检查文档权限
-    from app.services.document_service import check_document_permission
-    permission = check_document_permission(db, document_id, current_user.id)
-    if not permission["can_view"]:
-        raise HTTPException(status_code=403, detail="无权访问该任务所属的文档")
+    from app.services.document_service import assert_document_access
+    assert_document_access(db, document_id, current_user, required_role="viewer")
         
     try:
         due = getattr(task_in, "due_at", None) or getattr(task_in, "due_date", None) or getattr(task_in, "deadline", None)
-        return update_task(db, task_id, status=task_in.status, due_at=due, assignee_id=task_in.assignee_id)
+        updated = update_task(db, task_id, status=task_in.status, due_at=due, assignee_id=task_in.assignee_id)
+        new_status = str(updated.get("status", "")).upper()
+        prev_status = str(updated.get("previous_status") or "").upper()
+        if new_status in {"DONE", "CANCEL"} and prev_status not in {"DONE", "CANCEL"}:
+            try:
+                from app.services.notification_service import create_notification
+                doc_row = get_document(db, document_id, current_user.id)
+                owner_id = doc_row.get("owner_id") if doc_row else None
+                assignee_id = updated.get("assignee_id") or updated.get("assigned_to")
+                for target in {owner_id, assignee_id}:
+                    if target and target != current_user.id:
+                        create_notification(
+                            db,
+                            user_id=target,
+                            type="task",
+                            title="任务已完成",
+                            content=updated.get("title"),
+                            payload={"task_id": task_id, "document_id": document_id},
+                        )
+            except Exception:
+                pass
+            try:
+                log_user_event(
+                    db,
+                    user_id=current_user.id,
+                    event_type="task.done",
+                    document_id=document_id,
+                    meta={"task_id": task_id, "status": new_status},
+                )
+            except Exception:
+                pass
+        try:
+            log_action(
+                db,
+                user_id=current_user.id,
+                action="task.update",
+                resource_type="task",
+                resource_id=task_id,
+            )
+        except Exception:
+            pass
+        return updated
     except Exception as e:
         logger.error("更新任务失败: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail="更新任务失败")

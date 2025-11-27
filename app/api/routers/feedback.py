@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, field_validator
 
-from app.core.security import get_current_user_optional
+from app.core.security import get_current_user, get_current_user_optional
 from app.db.session import get_db
 from app.core.config import settings
+from app.services.audit_service import log_action
 
 router = APIRouter(prefix=settings.API_V1_STR, tags=["反馈"])
 
@@ -26,6 +27,18 @@ class FeedbackCreate(BaseModel):
             raise ValueError("反馈内容不能为空")
         if len(v) > 2000:
             raise ValueError("反馈内容过长")
+        return v
+
+
+class SatisfactionCreate(BaseModel):
+    rating: int
+    comment: str | None = None
+
+    @field_validator("rating")
+    @classmethod
+    def validate_rating(cls, v: int):
+        if v < 1 or v > 5:
+            raise ValueError("评分必须在 1 到 5 之间")
         return v
 
 
@@ -55,5 +68,43 @@ def submit_feedback(
         "user_id": row[1],
         "rating": row[2],
         "content": row[3],
+        "created_at": row[4],
+    }
+
+
+@router.post("/surveys/satisfaction")
+def submit_satisfaction(
+    payload: SatisfactionCreate,
+    db=Depends(get_db),
+    current_user=Depends(get_current_user),
+    request=None,
+):
+    rows = db.query(
+        """
+        INSERT INTO satisfaction_surveys (user_id, rating, comment)
+        VALUES (%s, %s, %s)
+        RETURNING id, user_id, rating, comment, created_at
+        """,
+        (getattr(current_user, "id", None), payload.rating, payload.comment),
+    )
+    if not rows:
+        raise HTTPException(status_code=500, detail="提交失败")
+    try:
+        log_action(
+            db,
+            user_id=getattr(current_user, "id", None),
+            action="survey.satisfaction.submit",
+            resource_type="survey",
+            resource_id=rows[0][0],
+            request=request,
+        )
+    except Exception:
+        pass
+    row = rows[0]
+    return {
+        "id": row[0],
+        "user_id": row[1],
+        "rating": row[2],
+        "comment": row[3],
         "created_at": row[4],
     }

@@ -8,6 +8,8 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Optional
 
+from fastapi import HTTPException
+
 from app.schemas import DocumentCreate, DocumentUpdate, TemplateCreate, TemplateUpdate
 
 logger = logging.getLogger(__name__)
@@ -27,7 +29,7 @@ STATUS_ARCHIVED = "archived"
 VALID_SORT_FIELDS = ["title", "created_at", "updated_at"]
 
 # 文档字段列表（用于 SELECT 查询）
-DOCUMENT_FIELDS = "id, owner_id, title, content, status, folder_name, tags, is_locked, locked_by, created_at, updated_at"
+DOCUMENT_FIELDS = "id, owner_id, title, content, status, folder_name, folder_id, tags, is_locked, locked_by, created_at, updated_at"
 
 # 模板字段列表
 TEMPLATE_FIELDS = "id, name, description, content, category, is_active, created_at, updated_at"
@@ -103,12 +105,13 @@ def _row_to_document_dict(row) -> Dict:
         'title': row[2],
         'content': row[3],
         'status': row[4],
-        'folder_name': row[5],
-        'tags': row[6],
-        'is_locked': row[7],
-        'locked_by': row[8],
-        'created_at': row[9],
-        'updated_at': row[10]
+        'folder_name': row[5] if len(row) > 5 else None,
+        'folder_id': row[6] if len(row) > 6 else None,
+        'tags': row[7] if len(row) > 7 else None,
+        'is_locked': row[8] if len(row) > 8 else None,
+        'locked_by': row[9] if len(row) > 9 else None,
+        'created_at': row[10] if len(row) > 10 else (row[9] if len(row) > 9 else None),
+        'updated_at': row[11] if len(row) > 11 else (row[10] if len(row) > 10 else None)
     }
 
 
@@ -255,13 +258,29 @@ def _build_update_clause(update_data: Dict, exclude_fields: List[str] = None) ->
     return update_fields
 
 
+def _refresh_document_tags_cache(db, document_id: int):
+    try:
+        rows = db.query(
+            "SELECT tag FROM document_tags WHERE document_id = %s ORDER BY tag",
+            (document_id,),
+        )
+        tags = [row[0] for row in rows] if rows else []
+        tags_str = ",".join(tags)
+        db.execute(
+            f"UPDATE {TABLE_DOCUMENTS} SET tags = %s WHERE id = %s",
+            (tags_str, document_id),
+        )
+    except Exception as e:
+        logger.warning("刷新文档标签缓存失败: %s", e)
+
+
 # ==================== 文档 CRUD 相关函数 ====================
 
 def get_documents(
-    db, 
-    owner_id: int, 
-    skip: int = 0, 
-    limit: int = 100, 
+    db,
+    owner_id: int,
+    skip: int = 0,
+    limit: int = 100,
     folder: Optional[str] = None, 
     status: Optional[str] = None, 
     tag: Optional[str] = None
@@ -301,8 +320,146 @@ def get_documents(
         f"SELECT {DOCUMENT_FIELDS} FROM {TABLE_DOCUMENTS}{where_clause} "
         f"ORDER BY updated_at DESC LIMIT {limit} OFFSET {skip}"
     )
-    
+
     return [_row_to_document_dict(row) for row in rows]
+
+
+def list_documents_for_user(
+    db,
+    user_id: int,
+    skip: int = 0,
+    limit: int = 100,
+    folder: Optional[str] = None,
+    folder_id: Optional[int] = None,
+    status: Optional[str] = None,
+    tag: Optional[str] = None,
+    keyword: Optional[str] = None,
+    owner: Optional[int] = None,
+    sort: str = "updated_at",
+    created_from: Optional[datetime] = None,
+    created_to: Optional[datetime] = None,
+    updated_from: Optional[datetime] = None,
+    updated_to: Optional[datetime] = None,
+    author: Optional[str] = None,
+) -> List[Dict]:
+    fields = (
+        "d.id, d.owner_id, d.title, d.content, d.status, d.folder_name, d.folder_id, d.tags, "
+        "d.is_locked, d.locked_by, d.created_at, d.updated_at"
+    )
+    joins = ["LEFT JOIN document_collaborators dc ON d.id = dc.document_id"]
+    params: List = [user_id, user_id]
+    conditions = ["(d.owner_id = %s OR dc.user_id = %s)"]
+
+    if tag:
+        joins.append("INNER JOIN document_tags dt ON dt.document_id = d.id")
+        conditions.append("dt.tag = %s")
+        params.append(tag)
+
+    if owner is not None:
+        conditions.append("d.owner_id = %s")
+        params.append(owner)
+
+    if folder:
+        conditions.append("d.folder_name = %s")
+        params.append(folder)
+
+    if folder_id is not None:
+        conditions.append("d.folder_id = %s")
+        params.append(folder_id)
+
+    if status:
+        conditions.append("d.status = %s")
+        params.append(status)
+
+    if keyword:
+        conditions.append("(d.title ILIKE %s OR d.content ILIKE %s)")
+        params.extend([f"%{keyword}%", f"%{keyword}%"])
+
+    if created_from:
+        conditions.append("d.created_at >= %s")
+        params.append(created_from)
+
+    if created_to:
+        conditions.append("d.created_at <= %s")
+        params.append(created_to)
+
+    if updated_from:
+        conditions.append("d.updated_at >= %s")
+        params.append(updated_from)
+
+    if updated_to:
+        conditions.append("d.updated_at <= %s")
+        params.append(updated_to)
+
+    if author:
+        if author.isdigit():
+            conditions.append("d.owner_id = %s")
+            params.append(int(author))
+        else:
+            joins.append("LEFT JOIN users u ON u.id = d.owner_id")
+            conditions.append("(u.username ILIKE %s OR u.email ILIKE %s OR u.phone ILIKE %s)")
+            like_author = f"%{author}%"
+            params.extend([like_author, like_author, like_author])
+
+    order_field = "updated_at"
+    if sort == "created_at":
+        order_field = "created_at"
+    elif sort == "title":
+        order_field = "title"
+
+    sql = f"""
+        SELECT DISTINCT {fields}
+        FROM {TABLE_DOCUMENTS} d
+        {' '.join(joins)}
+        WHERE {' AND '.join(conditions)}
+        ORDER BY d.{order_field} DESC
+        LIMIT %s OFFSET %s
+    """
+
+    params.extend([limit, skip])
+    rows = db.query(sql, tuple(params))
+    return [_row_to_document_dict(row) for row in rows]
+
+
+def add_document_tags(db, document_id: int, tags: List[str]) -> List[str]:
+    clean_tags = []
+    for t in tags or []:
+        if t and isinstance(t, str) and t.strip():
+            clean_tags.append(t.strip())
+
+    if not clean_tags:
+        return list_document_tags(db, document_id)
+
+    for tag in clean_tags:
+        db.execute(
+            """
+            INSERT INTO document_tags (document_id, tag, created_at)
+            SELECT %s, %s, now()
+            WHERE NOT EXISTS (
+                SELECT 1 FROM document_tags WHERE document_id = %s AND tag = %s
+            )
+            """,
+            (document_id, tag, document_id, tag),
+        )
+
+    _refresh_document_tags_cache(db, document_id)
+    return list_document_tags(db, document_id)
+
+
+def list_document_tags(db, document_id: int) -> List[str]:
+    rows = db.query(
+        "SELECT tag FROM document_tags WHERE document_id = %s ORDER BY tag",
+        (document_id,),
+    )
+    return [row[0] for row in rows] if rows else []
+
+
+def delete_document_tag(db, document_id: int, tag: str) -> None:
+    db.execute(
+        "DELETE FROM document_tags WHERE document_id = %s AND tag = %s",
+        (document_id, tag),
+    )
+    _refresh_document_tags_cache(db, document_id)
 
 
 def get_document(db, document_id: int, owner_id: int) -> Optional[Dict]:
@@ -400,6 +557,24 @@ def check_document_permission(db, document_id: int, user_id: int) -> Dict[str, b
     
     # 无权限
     return {"can_view": False, "can_edit": False, "is_owner": False}
+
+
+def assert_document_access(db, document_id: int, current_user, required_role: str = "viewer"):
+    """统一文档权限校验，基于协作角色和管理员角色。"""
+    role_order = {"viewer": 0, "editor": 1, "owner": 2, "admin": 3}
+    user_role = getattr(current_user, "role", "user") or "user"
+    if user_role == "admin":
+        return
+
+    permission = check_document_permission(db, document_id, getattr(current_user, "id", 0))
+    required_level = role_order.get(required_role, 0)
+    # owner 权限
+    if required_level >= role_order["owner"] and not permission.get("is_owner"):
+        raise HTTPException(status_code=403, detail="无权访问文档")
+    if required_level == role_order["editor"] and not permission.get("can_edit"):
+        raise HTTPException(status_code=403, detail="无权编辑文档")
+    if required_level == role_order["viewer"] and not permission.get("can_view"):
+        raise HTTPException(status_code=403, detail="无权查看文档")
 
 
 def is_document_owner(db, document_id: int, user_id: int) -> bool:
@@ -674,6 +849,7 @@ def create_document(db, document_data_or_schema, owner_id: int) -> Optional[Dict
         content = doc_data.get('content', '')
         status = doc_data.get('status', STATUS_ACTIVE)
         folder_name = doc_data.get('folder_name')
+        folder_id = doc_data.get('folder_id')
         tags = doc_data.get('tags')
         
         # 如果 folder_name 为 None 或空字符串，自动设置为 "默认文件夹"
@@ -687,12 +863,13 @@ def create_document(db, document_data_or_schema, owner_id: int) -> Optional[Dict
         folder_safe = _escape(folder_name)
         tags_safe = _escape(tags) if tags is not None else "NULL"
         now_sql = _format_datetime(now)
+        folder_value = folder_id if isinstance(folder_id, int) else 'NULL'
 
         # 执行插入
         db.execute(
             f"INSERT INTO {TABLE_DOCUMENTS} "
-            f"(title, content, status, owner_id, folder_name, tags, created_at, updated_at) "
-            f"VALUES ({title_safe}, {content_safe}, {status_safe}, {owner_id}, {folder_safe}, {tags_safe}, {now_sql}, {now_sql})"
+            f"(title, content, status, owner_id, folder_name, folder_id, tags, created_at, updated_at) "
+            f"VALUES ({title_safe}, {content_safe}, {status_safe}, {owner_id}, {folder_safe}, {folder_value}, {tags_safe}, {now_sql}, {now_sql})"
         )
         
         # 获取刚插入的文档（通过 owner_id 和最新 ID 查询）
@@ -700,9 +877,15 @@ def create_document(db, document_data_or_schema, owner_id: int) -> Optional[Dict
             f"SELECT {DOCUMENT_FIELDS} FROM {TABLE_DOCUMENTS} "
             f"WHERE owner_id = {owner_id} ORDER BY id DESC LIMIT 1"
         )
-        
+
         if rows:
-            return _row_to_document_dict(rows[0])
+            doc = _row_to_document_dict(rows[0])
+            if tags:
+                try:
+                    add_document_tags(db, doc.get('id'), [t.strip() for t in tags.split(',') if t.strip()])
+                except Exception as tag_err:
+                    logger.warning("初始化文档标签失败: %s", tag_err)
+            return doc
         
         logger.warning("创建文档后无法查询到新文档，owner_id=%s", owner_id)
         return None
@@ -757,7 +940,21 @@ def update_document(db, document_id: int, document_update, user_id: int) -> Opti
             # 移除owner_id限制，允许协作者更新（权限已在调用处验证）
             sql = f"UPDATE {TABLE_DOCUMENTS} SET {', '.join(update_fields)} WHERE id = %s"
             db.execute(sql, (document_id,))
-        
+
+        if 'tags' in update_data:
+            try:
+                db.execute("DELETE FROM document_tags WHERE document_id = %s", (document_id,))
+                new_tags = []
+                raw_tags = update_data.get('tags')
+                if raw_tags:
+                    new_tags = [t.strip() for t in str(raw_tags).split(',') if t.strip()]
+                if new_tags:
+                    add_document_tags(db, document_id, new_tags)
+                else:
+                    _refresh_document_tags_cache(db, document_id)
+            except Exception as tag_err:
+                logger.warning("同步标签失败: %s", tag_err)
+
         # 返回更新后的文档
         updated_rows = db.query(f"SELECT {DOCUMENT_FIELDS} FROM {TABLE_DOCUMENTS} WHERE id = %s LIMIT 1", (document_id,))
         if updated_rows:
@@ -864,115 +1061,126 @@ def unlock_document(db, document_id: int, owner_id: int) -> bool:
 # ==================== 文档搜索相关函数 ====================
 
 def search_documents(
-    db, 
-    owner_id: int, 
-    keyword: Optional[str] = None, 
+    db,
+    owner_id: int,
+    keyword: Optional[str] = None,
     tags: Optional[str] = None,
-    folder: Optional[str] = None, 
-    sort_by: str = "updated_at", 
+    folder: Optional[str] = None,
+    sort_by: str = "updated_at",
     order: str = "desc",
-    created_from: Optional[str] = None, 
+    created_from: Optional[str] = None,
     created_to: Optional[str] = None,
-    updated_from: Optional[str] = None, 
+    updated_from: Optional[str] = None,
     updated_to: Optional[str] = None,
-    skip: int = 0, 
-    limit: int = 100, 
+    skip: int = 0,
+    limit: int = 100,
     status: Optional[str] = None
 ) -> List[Dict]:
     """
     搜索文档（支持多条件组合查询）
-    
-    Args:
-        db: 数据库连接对象
-        owner_id: 文档所有者ID
-        keyword: 关键词（在标题和内容中搜索，使用 ILIKE）
-        tags: 标签（使用全文搜索）
-        folder: 文件夹名称
-        sort_by: 排序字段（title/created_at/updated_at），默认为 updated_at
-        order: 排序方向（asc/desc），默认为 desc
-        created_from: 创建时间起始（日期字符串）
-        created_to: 创建时间结束（日期字符串）
-        updated_from: 更新时间起始（日期字符串）
-        updated_to: 更新时间结束（日期字符串）
-        skip: 跳过的记录数（分页）
-        limit: 返回的最大记录数（分页）
-        status: 文档状态
-        
-    Returns:
-        文档字典列表，按指定字段和方向排序
     """
-    where_conditions = [f"owner_id = {owner_id}"]
-    
-    # 关键词搜索
+    joins = ["LEFT JOIN document_collaborators dc ON d.id = dc.document_id"]
+    where_conditions = ["(d.owner_id = %s OR dc.user_id = %s)"]
+    params: List = [owner_id, owner_id]
+
     if keyword:
-        keyword_safe = _escape(f"%{keyword}%")
-        where_conditions.append(f"(title ILIKE {keyword_safe} OR content ILIKE {keyword_safe})")
-    
-    # 标签搜索
+        where_conditions.append("(d.title ILIKE %s OR d.content ILIKE %s)")
+        params.extend([f"%{keyword}%", f"%{keyword}%"])
+
     if tags:
-        tag_query = _escape(tags)
-        where_conditions.append(f"to_tsvector('simple', tags) @@ plainto_tsquery({tag_query})")
+        joins.append("INNER JOIN document_tags dt ON dt.document_id = d.id")
+        where_conditions.append("dt.tag = %s")
+        params.append(tags)
 
-    # 状态筛选
     if status:
-        status_safe = _escape(status)
-        where_conditions.append(f"status = {status_safe}")
-    
-    # 文件夹搜索
-    if folder:
-        folder_safe = _escape(folder)
-        where_conditions.append(f"folder_name = {folder_safe}")
+        where_conditions.append("d.status = %s")
+        params.append(status)
 
-    # 日期范围搜索
+    if folder:
+        where_conditions.append("d.folder_name = %s")
+        params.append(folder)
+
     if created_from:
-        from_safe = _format_datetime(created_from)
-        where_conditions.append(f"created_at >= {from_safe}")
-    
+        where_conditions.append("d.created_at >= %s")
+        params.append(created_from)
+
     if created_to:
-        to_safe = _format_datetime(created_to)
-        where_conditions.append(f"created_at <= {to_safe}")
-    
+        where_conditions.append("d.created_at <= %s")
+        params.append(created_to)
+
     if updated_from:
-        from_safe = _format_datetime(updated_from)
-        where_conditions.append(f"updated_at >= {from_safe}")
-    
+        where_conditions.append("d.updated_at >= %s")
+        params.append(updated_from)
+
     if updated_to:
-        to_safe = _format_datetime(updated_to)
-        where_conditions.append(f"updated_at <= {to_safe}")
-    
+        where_conditions.append("d.updated_at <= %s")
+        params.append(updated_to)
+
     where_clause = " WHERE " + " AND ".join(where_conditions)
-    
-    # 排序字段验证
+
     sort_field = sort_by if sort_by in VALID_SORT_FIELDS else "updated_at"
     order_dir = "ASC" if order.lower() == "asc" else "DESC"
-    
-    rows = db.query(
-        f"SELECT {DOCUMENT_FIELDS} FROM {TABLE_DOCUMENTS}{where_clause} "
-        f"ORDER BY {sort_field} {order_dir} LIMIT {limit} OFFSET {skip}"
-    )
-    
+
+    sql = f"""
+        SELECT DISTINCT d.id, d.owner_id, d.title, d.content, d.status, d.folder_name, d.tags,
+               d.is_locked, d.locked_by, d.created_at, d.updated_at
+        FROM {TABLE_DOCUMENTS} d
+        {' '.join(joins)}
+        {where_clause}
+        ORDER BY d.{sort_field} {order_dir}
+        LIMIT %s OFFSET %s
+    """
+    params.extend([limit, skip])
+    rows = db.query(sql, tuple(params))
+
     return [_row_to_document_dict(row) for row in rows]
 
 
 # ==================== 辅助查询函数（文件夹、标签） ====================
 
-def get_folders(db, owner_id: int) -> List[str]:
-    """
-    获取用户的所有文件夹列表
-    
-    Args:
-        db: 数据库连接对象
-        owner_id: 文档所有者ID
-        
-    Returns:
-        文件夹名称列表（去重、排序）
-    """
+def get_folders(db, owner_id: int) -> List[Dict]:
     rows = db.query(
-        f"SELECT DISTINCT folder_name FROM {TABLE_DOCUMENTS} "
-        f"WHERE owner_id = {owner_id} AND folder_name IS NOT NULL ORDER BY folder_name"
+        "SELECT id, name, created_at, updated_at FROM folders WHERE owner_id = %s ORDER BY name",
+        (owner_id,),
     )
-    
-    return [row[0] for row in rows if row[0]]
+
+    return [
+        {
+            "id": row[0],
+            "name": row[1],
+            "created_at": row[2],
+            "updated_at": row[3],
+        }
+        for row in rows
+    ] if rows else []
+
+
+def create_folder(db, owner_id: int, name: str) -> Dict:
+    now = datetime.utcnow()
+    db.execute(
+        "INSERT INTO folders (owner_id, name, created_at, updated_at) VALUES (%s, %s, %s, %s)",
+        (owner_id, name, now, now),
+    )
+    rows = db.query(
+        "SELECT id, name, created_at, updated_at FROM folders WHERE owner_id=%s AND name=%s ORDER BY id DESC LIMIT 1",
+        (owner_id, name),
+    )
+    if rows:
+        return {"id": rows[0][0], "name": rows[0][1], "created_at": rows[0][2], "updated_at": rows[0][3]}
+    return {}
+
+
+def rename_folder(db, owner_id: int, folder_id: int, name: str) -> Dict:
+    db.execute("UPDATE folders SET name=%s, updated_at=now() WHERE id=%s AND owner_id=%s", (name, folder_id, owner_id))
+    rows = db.query("SELECT id, name, created_at, updated_at FROM folders WHERE id=%s AND owner_id=%s", (folder_id, owner_id))
+    if not rows:
+        return {}
+    return {"id": rows[0][0], "name": rows[0][1], "created_at": rows[0][2], "updated_at": rows[0][3]}
+
+
+def delete_folder(db, owner_id: int, folder_id: int):
+    db.execute("UPDATE documents SET folder_id = NULL WHERE folder_id = %s", (folder_id,))
+    db.execute("DELETE FROM folders WHERE id=%s AND owner_id=%s", (folder_id, owner_id))
 
 
 def get_tags(db, owner_id: int) -> List[str]:
@@ -990,18 +1198,17 @@ def get_tags(db, owner_id: int) -> List[str]:
         标签在数据库中可能以逗号分隔的字符串形式存储，函数会自动拆分并去重
     """
     rows = db.query(
-        f"SELECT DISTINCT tags FROM {TABLE_DOCUMENTS} "
-        f"WHERE owner_id = {owner_id} AND tags IS NOT NULL AND tags != '' ORDER BY tags"
+        """
+        SELECT DISTINCT dt.tag
+        FROM document_tags dt
+        INNER JOIN documents d ON dt.document_id = d.id
+        WHERE d.owner_id = %s
+        ORDER BY dt.tag
+        """,
+        (owner_id,),
     )
-    
-    # 合并所有标签并去重
-    all_tags = set()
-    for row in rows:
-        if row[0]:
-            tags = row[0].split(',')
-            all_tags.update(tag.strip() for tag in tags if tag.strip())
-    
-    return sorted(list(all_tags))
+
+    return [row[0] for row in rows] if rows else []
 
 
 # ==================== 文档版本相关函数 ====================
