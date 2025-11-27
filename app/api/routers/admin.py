@@ -318,12 +318,21 @@ def upsert_setting(
     current_admin=Depends(require_admin),
 ):
     value_json = json.dumps(payload.value)
-    db.execute(
-        """
-        INSERT INTO system_settings (key, value, updated_at)
-        VALUES (%s, %s, now())
-        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
-        """,
-        (key, value_json),
-    )
+    
+    # Check if setting exists
+    existing = db.execute("SELECT \"key\" FROM system_settings WHERE \"key\" = %s", (key,)).fetchone()
+    
+    if existing:
+        # Update existing setting
+        db.execute(
+            "UPDATE system_settings SET value = %s, updated_at = now() WHERE \"key\" = %s",
+            (value_json, key),
+        )
+    else:
+        # Insert new setting
+        db.execute(
+            "INSERT INTO system_settings (\"key\", value, updated_at) VALUES (%s, %s, now())",
+            (key, value_json),
+        )
+    
     return {"key": key, "value": payload.value}

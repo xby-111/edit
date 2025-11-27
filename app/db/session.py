@@ -327,17 +327,28 @@ def parse_database_url(url):
 
 def create_connection(max_retries=3):
     """创建新的数据库连接（延迟连接 + 重试机制）"""
+    import os
+    
+    # 支持通过环境变量配置连接超时
+    db_connect_timeout = int(os.environ.get("DB_CONNECT_TIMEOUT", "8"))
+    
     last_error = None
     for attempt in range(max_retries):
         try:
             # 解析连接参数
             db_params = parse_database_url(DATABASE_URL)
             # 安全地记录连接参数（不包含密码）
-            logger.info(f"尝试连接数据库 (尝试 {attempt + 1}/{max_retries}): host={db_params['host']}, port={db_params['port']}, user={db_params['user']}, database={db_params['database']}")
+            logger.info(f"尝试连接数据库 (尝试 {attempt + 1}/{max_retries}): host={db_params['host']}, port={db_params['port']}, user={db_params['user']}, database={db_params['database']}, timeout={db_connect_timeout}s")
             
             # 使用解析后的参数创建连接
-            # py-opengauss 使用 open 方法
-            raw_conn = py_opengauss.open(DATABASE_URL)
+            # py-opengauss 使用 open 方法，添加连接超时参数
+            connect_url = DATABASE_URL
+            if "?" in connect_url:
+                connect_url += f"&connect_timeout={db_connect_timeout}"
+            else:
+                connect_url += f"?connect_timeout={db_connect_timeout}"
+                
+            raw_conn = py_opengauss.open(connect_url)
             logger.info("openGauss 连接创建成功")
             
             # 返回原始连接（兼容层将在get_db中应用）

@@ -4,6 +4,7 @@
 import logging
 import re
 from typing import List, Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import Response
@@ -293,10 +294,12 @@ async def export_document_endpoint(
                 request=request,
                 meta={"format": "markdown"},
             )
+            ascii_name = f"document_{document_id}.md"
+            cd = f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(ascii_name)}'
             return Response(
                 content=markdown_content,
                 media_type="text/markdown",
-                headers={"Content-Disposition": f"attachment; filename={title}.md"}
+                headers={"Content-Disposition": cd}
             )
         elif format.lower() == 'html':
             log_action(
@@ -308,10 +311,12 @@ async def export_document_endpoint(
                 request=request,
                 meta={"format": "html"},
             )
+            ascii_name = f"document_{document_id}.html"
+            cd = f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(ascii_name)}'
             return Response(
                 content=content,
                 media_type="text/html",
-                headers={"Content-Disposition": f"attachment; filename={title}.html"}
+                headers={"Content-Disposition": cd}
             )
         else:
             raise HTTPException(status_code=400, detail="不支持的导出格式")
