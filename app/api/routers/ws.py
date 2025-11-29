@@ -157,10 +157,15 @@ class ConnectionManager:
     async def handle_pong(self, websocket: WebSocket) -> None:
         """处理心跳响应"""
         self.last_heartbeat[websocket] = datetime.utcnow()
+        username = self.usernames.get(websocket, "未知用户")
+        logger.debug(f"收到来自 {username} 的心跳响应")
 
     async def send_heartbeat_to_all(self) -> None:
         """向所有活跃连接发送心跳"""
         current_time = datetime.utcnow()
+        total_connections = sum(len(conns) for conns in self.rooms.values())
+        logger.debug(f"发送心跳到所有连接，当前总连接数: {total_connections}")
+        
         for document_id, connections in self.rooms.items():
             for connection in connections:
                 try:
