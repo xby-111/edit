@@ -199,7 +199,7 @@ class ApiClient {
     async exportDocument(id, format = 'html') {
         // 确保 format 是字符串，防止传入 Promise
         const formatStr = String(format);
-        const validFormats = ['html', 'markdown'];
+        const validFormats = ['html', 'markdown', 'pdf', 'docx'];
         if (!validFormats.includes(formatStr)) {
             throw new Error(`无效的导出格式: ${formatStr}。支持的格式: ${validFormats.join(', ')}`);
         }
@@ -467,7 +467,7 @@ function getCurrentUserId() {
 async function exportDocument(documentId) {
     try {
         // 显示格式选择对话框
-        const format = showExportDialog();
+        const format = await showExportDialog();
         if (!format) return;
         
         const response = await api.exportDocument(documentId, format);
@@ -529,6 +529,8 @@ function showExportDialog() {
             <div style="margin: 20px 0;">
                 <button id="export-html" style="margin: 0 10px; padding: 10px 20px;">HTML</button>
                 <button id="export-markdown" style="margin: 0 10px; padding: 10px 20px;">Markdown</button>
+                <button id="export-pdf" style="margin: 0 10px; padding: 10px 20px;">PDF</button>
+                <button id="export-word" style="margin: 0 10px; padding: 10px 20px;">Word</button>
                 <button id="export-cancel" style="margin: 0 10px; padding: 10px 20px; background-color: #6c757d;">取消</button>
             </div>
         `;
@@ -544,6 +546,16 @@ function showExportDialog() {
         document.getElementById('export-markdown').addEventListener('click', () => {
             document.body.removeChild(modal);
             resolve('markdown');
+        });
+        
+        document.getElementById('export-pdf').addEventListener('click', () => {
+            document.body.removeChild(modal);
+            resolve('pdf');
+        });
+        
+        document.getElementById('export-word').addEventListener('click', () => {
+            document.body.removeChild(modal);
+            resolve('docx');
         });
         
         document.getElementById('export-cancel').addEventListener('click', () => {
@@ -567,7 +579,7 @@ async function importDocument() {
         // 创建文件输入元素
         const fileInput = document.createElement('input');
         fileInput.type = 'file';
-        fileInput.accept = '.md,.txt,.html';
+        fileInput.accept = '.md,.txt,.html,.docx,.pdf';
         fileInput.style.display = 'none';
         
         fileInput.addEventListener('change', async function(e) {

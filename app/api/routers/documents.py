@@ -318,6 +318,99 @@ async def export_document_endpoint(
                 media_type="text/html",
                 headers={"Content-Disposition": cd}
             )
+        elif format.lower() == 'pdf':
+            # PDF 导出：使用 xhtml2pdf 将 HTML 转换为 PDF
+            import io
+            from xhtml2pdf import pisa
+            
+            # 包装 HTML 内容，确保正确的编码和样式
+            html_template = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <title>{title}</title>
+                <style>
+                    body {{ font-family: SimSun, Arial, sans-serif; }}
+                </style>
+            </head>
+            <body>
+                {content}
+            </body>
+            </html>
+            """
+            
+            pdf_buffer = io.BytesIO()
+            pisa_status = pisa.CreatePDF(html_template, dest=pdf_buffer, encoding='utf-8')
+            
+            if pisa_status.err:
+                raise HTTPException(status_code=500, detail="PDF 转换失败")
+            
+            pdf_buffer.seek(0)
+            pdf_content = pdf_buffer.read()
+            
+            log_action(
+                db,
+                user_id=current_user.id,
+                action="export.request",
+                resource_type="document",
+                resource_id=document_id,
+                request=request,
+                meta={"format": "pdf"},
+            )
+            ascii_name = f"document_{document_id}.pdf"
+            cd = f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(ascii_name)}'
+            return Response(
+                content=pdf_content,
+                media_type="application/pdf",
+                headers={"Content-Disposition": cd}
+            )
+        elif format.lower() == 'docx' or format.lower() == 'word':
+            # Word 导出：使用 python-docx 将 HTML 转换为 DOCX
+            import io
+            from docx import Document as DocxDocument
+            from docx.shared import Pt
+            
+            doc = DocxDocument()
+            
+            # 将 HTML 转换为纯文本（简化处理）
+            text_content = htmlToMarkdown(content)
+            
+            # 按段落添加内容
+            paragraphs = text_content.split('\n\n')
+            for para in paragraphs:
+                if para.strip():
+                    # 处理标题
+                    if para.startswith('# '):
+                        doc.add_heading(para[2:].strip(), level=1)
+                    elif para.startswith('## '):
+                        doc.add_heading(para[3:].strip(), level=2)
+                    elif para.startswith('### '):
+                        doc.add_heading(para[4:].strip(), level=3)
+                    else:
+                        doc.add_paragraph(para.strip())
+            
+            docx_buffer = io.BytesIO()
+            doc.save(docx_buffer)
+            docx_buffer.seek(0)
+            docx_content = docx_buffer.read()
+            
+            log_action(
+                db,
+                user_id=current_user.id,
+                action="export.request",
+                resource_type="document",
+                resource_id=document_id,
+                request=request,
+                meta={"format": "docx"},
+            )
+            ascii_name = f"document_{document_id}.docx"
+            cd = f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(ascii_name)}'
+            return Response(
+                content=docx_content,
+                media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                headers={"Content-Disposition": cd}
+            )
         else:
             raise HTTPException(status_code=400, detail="不支持的导出格式")
     except HTTPException:
@@ -347,6 +440,50 @@ async def import_document_endpoint(
         elif file.filename.endswith('.html'):
             # HTML 文件，直接使用
             html_content = content.decode('utf-8')
+        elif file.filename.endswith('.docx'):
+            # Word 文档导入：使用 python-docx 读取
+            import io
+            from docx import Document as DocxDocument
+            
+            docx_buffer = io.BytesIO(content)
+            doc = DocxDocument(docx_buffer)
+            
+            # 提取段落内容并转换为 HTML
+            html_parts = []
+            for para in doc.paragraphs:
+                text = para.text.strip()
+                if text:
+                    # 检查段落样式判断标题级别
+                    if para.style.name.startswith('Heading 1'):
+                        html_parts.append(f'<h1>{text}</h1>')
+                    elif para.style.name.startswith('Heading 2'):
+                        html_parts.append(f'<h2>{text}</h2>')
+                    elif para.style.name.startswith('Heading 3'):
+                        html_parts.append(f'<h3>{text}</h3>')
+                    else:
+                        html_parts.append(f'<p>{text}</p>')
+            
+            html_content = '\n'.join(html_parts)
+        elif file.filename.endswith('.pdf'):
+            # PDF 文档导入：使用 pdfplumber 提取文本
+            import io
+            import pdfplumber
+            
+            pdf_buffer = io.BytesIO(content)
+            html_parts = []
+            
+            with pdfplumber.open(pdf_buffer) as pdf:
+                for page in pdf.pages:
+                    text = page.extract_text()
+                    if text:
+                        # 按行分割并转换为段落
+                        lines = text.split('\n')
+                        for line in lines:
+                            line = line.strip()
+                            if line:
+                                html_parts.append(f'<p>{line}</p>')
+            
+            html_content = '\n'.join(html_parts)
         else:
             # 其他文件类型，作为纯文本处理
             text_content = content.decode('utf-8')
