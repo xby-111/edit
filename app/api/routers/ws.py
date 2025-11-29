@@ -12,6 +12,10 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# 心跳配置常量
+HEARTBEAT_INTERVAL = 25  # 秒，心跳发送间隔
+HEARTBEAT_TIMEOUT = HEARTBEAT_INTERVAL * 3  # 75秒，超时时间为3倍心跳间隔
+
 router = APIRouter()
 
 
@@ -134,9 +138,9 @@ class ConnectionManager:
                 
             dead_connections = []
             for connection in self.rooms[doc_id]:
-                # 检查心跳超时（60秒无心跳视为死连接）
+                # 检查心跳超时（超时时间为心跳间隔的3倍，确保足够的容错性）
                 last_heartbeat = self.last_heartbeat.get(connection)
-                if not last_heartbeat or (current_time - last_heartbeat).seconds > 60:
+                if not last_heartbeat or (current_time - last_heartbeat).seconds > HEARTBEAT_TIMEOUT:
                     dead_connections.append(connection)
                     continue
                 
@@ -526,7 +530,7 @@ async def heartbeat_task():
     while True:
         try:
             await manager.send_heartbeat_to_all()
-            await asyncio.sleep(25)  # 每25秒发送一次心跳（比清理间隔短）
+            await asyncio.sleep(HEARTBEAT_INTERVAL)  # 每25秒发送一次心跳
         except Exception as e:
             logger.error(f"心跳任务出错: {e}")
-            await asyncio.sleep(25)
+            await asyncio.sleep(HEARTBEAT_INTERVAL)
