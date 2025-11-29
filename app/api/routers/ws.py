@@ -137,7 +137,7 @@ class ConnectionManager:
                 continue
                 
             dead_connections = []
-            for connection in self.rooms[doc_id]:
+            for connection in list(self.rooms[doc_id]):
                 # 检查心跳超时（超时时间为心跳间隔的3倍，确保足够的容错性）
                 last_heartbeat = self.last_heartbeat.get(connection)
                 if not last_heartbeat or (current_time - last_heartbeat).seconds > HEARTBEAT_TIMEOUT:
@@ -166,8 +166,8 @@ class ConnectionManager:
         total_connections = sum(len(conns) for conns in self.rooms.values())
         logger.debug(f"发送心跳到所有连接，当前总连接数: {total_connections}")
         
-        for document_id, connections in self.rooms.items():
-            for connection in connections:
+        for document_id, connections in list(self.rooms.items()):
+            for connection in list(connections):
                 try:
                     await connection.send_json({
                         "type": "ping", 
