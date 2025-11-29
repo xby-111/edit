@@ -97,9 +97,27 @@
         #task-form input, #task-form textarea { width: 100%; padding: 6px; margin-bottom: 6px; }
         .online-users { font-size: 12px; color: #555; }
         #markdown-editor { display: none; }
+        /* 连接状态指示器样式 */
+        .status-connected { color: #4CAF50; }
+        .status-disconnected { color: #F44336; }
+        .status-reconnecting { color: #FF9800; }
+        #connection-status {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            padding: 8px 12px;
+            background: white;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            font-size: 14px;
+            z-index: 1000;
+        }
     </style>
 </head>
 <body>
+    <!-- 连接状态指示器 -->
+    <div id="connection-status" class="status-disconnected">● 未连接</div>
+    
     <div class="container">
         <div class="header">
             <h2>多人实时协作编辑器</h2>
@@ -196,6 +214,11 @@
         let socket = null;
         let isRemoteUpdating = false;
         let onlineUsers = new Set();
+        
+        // WebSocket 重连配置
+        let reconnectAttempts = 0;
+        const MAX_RECONNECT_ATTEMPTS = 10;
+        const RECONNECT_INTERVAL = 3000; // 3 秒
 
         const params = new URLSearchParams(window.location.search);
         const docId = parseInt(params.get('doc_id') || '1');
@@ -300,7 +323,26 @@
             });
         }
 
-        function updateStatus(text) { document.getElementById('status-text').textContent = text; }
+        function updateStatus(text) { 
+            document.getElementById('status-text').textContent = text; 
+            // 同时更新连接状态指示器
+            const indicator = document.getElementById('connection-status');
+            if (indicator) {
+                if (text === '已连接') {
+                    indicator.className = 'status-connected';
+                    indicator.textContent = '● 已连接';
+                } else if (text === '连接已关闭' || text === '连接出错') {
+                    indicator.className = 'status-disconnected';
+                    indicator.textContent = '● 已断开';
+                } else if (text === '重连中...') {
+                    indicator.className = 'status-reconnecting';
+                    indicator.textContent = '● 重连中...';
+                } else {
+                    indicator.className = 'status-disconnected';
+                    indicator.textContent = '● ' + text;
+                }
+            }
+        }
         function updateOnlineUsers() { document.getElementById('online-users').textContent = `在线用户：${Array.from(onlineUsers).join(', ') || '-'}`; }
         function showSaveIndicator() {
             const indicator = document.getElementById('save-indicator');
@@ -356,6 +398,7 @@
 
             socket.onopen = () => {
                 updateStatus('已连接');
+                reconnectAttempts = 0; // 重置重连计数
                 document.getElementById('editing-tip').textContent = '你正在编辑文档';
             };
 
@@ -369,10 +412,30 @@
                 updateStatus('连接已关闭');
                 // 清理socket引用
                 socket = null;
+                
+                // 尝试自动重连
+                if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                    reconnectAttempts++;
+                    updateStatus('重连中...');
+                    console.log(`尝试重连... (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
+                    setTimeout(() => {
+                        connectWebSocket();
+                    }, RECONNECT_INTERVAL);
+                } else {
+                    console.log('已达到最大重连次数');
+                    alert('连接已断开，请刷新页面重新连接');
+                }
             };
 
             socket.onmessage = (event) => {
                 const msg = JSON.parse(event.data || '{}');
+                
+                // 处理心跳消息
+                if (msg.type === 'ping') {
+                    socket.send(JSON.stringify({ type: 'pong' }));
+                    return;
+                }
+                
                 if (msg.type === 'presence') {
                     if (msg.action === 'init' && Array.isArray(msg.online_users)) {
                         onlineUsers = new Set(msg.online_users);

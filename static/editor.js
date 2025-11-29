@@ -6,6 +6,12 @@ let autoSaveTimer = null;
 let lastSaveTime = 0;
 let apiClient = null;
 
+// WebSocket 重连配置
+let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 10;
+const RECONNECT_INTERVAL = 3000; // 3 秒
+let currentToken = ""; // 保存当前 token 用于重连
+
 // 初始化 API 客户端
 function initApiClient() {
     if (!apiClient) {
@@ -36,8 +42,46 @@ function initApiClient() {
     }
 }
 
+// 更新连接状态显示
+function updateConnectionStatus(status) {
+    const indicator = document.getElementById('connection-status');
+    if (indicator) {
+        switch(status) {
+            case 'connected':
+                indicator.className = 'status-connected';
+                indicator.textContent = '● 已连接';
+                break;
+            case 'disconnected':
+                indicator.className = 'status-disconnected';
+                indicator.textContent = '● 已断开';
+                break;
+            case 'reconnecting':
+                indicator.className = 'status-reconnecting';
+                indicator.textContent = '● 重连中...';
+                break;
+        }
+    }
+    
+    // 同时更新编辑器状态提示
+    const statusText = document.getElementById('status-text');
+    if (statusText) {
+        switch(status) {
+            case 'connected':
+                statusText.textContent = '已连接';
+                break;
+            case 'disconnected':
+                statusText.textContent = '已断开';
+                break;
+            case 'reconnecting':
+                statusText.textContent = '重连中...';
+                break;
+        }
+    }
+}
+
 function connect(doc_id, token) {
     documentId = doc_id;
+    currentToken = token; // 保存 token 用于重连
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const tokenPart = token ? `?token=${token}` : '';
     ws = new WebSocket(`${protocol}//${location.host}/api/v1/ws/documents/${doc_id}${tokenPart}`);
@@ -45,42 +89,79 @@ function connect(doc_id, token) {
     ws.onmessage = (event) => {
         const msg = JSON.parse(event.data);
         
+        // 处理心跳消息
+        if (msg.type === "ping") {
+            ws.send(JSON.stringify({ type: "pong" }));
+            return;
+        }
+        
         if (msg.type === "init") {
-            // 初始化内容
+            // 初始化内容 - 支持新旧两种格式
+            const content = msg.payload?.html || msg.content || "";
             if (window.quillEditor) {
-                window.quillEditor.root.innerHTML = msg.content;
+                window.quillEditor.root.innerHTML = content;
             } else {
                 const editor = document.getElementById("editor");
-                if (editor) editor.value = msg.content;
+                if (editor) editor.value = content;
             }
-            localContent = msg.content;
+            localContent = content;
             
             // 保存服务器时间戳
             localStorage.setItem(`server_time_${doc_id}`, Date.now().toString());
         }
-        if (msg.type === "content") {
+        if (msg.type === "content" || msg.type === "content_update") {
             // 只有当内容来自其他用户时才更新，避免循环更新
-            if (msg.user_id !== undefined) {
+            const content = msg.payload?.html || msg.content || "";
+            if (msg.user_id !== undefined || msg.user !== undefined) {
                 if (window.quillEditor) {
-                    window.quillEditor.root.innerHTML = msg.content;
+                    window.quillEditor.root.innerHTML = content;
                 } else {
                     const editor = document.getElementById("editor");
-                    if (editor) editor.value = msg.content;
+                    if (editor) editor.value = content;
                 }
-                localContent = msg.content;
+                localContent = content;
             }
         }
         if (msg.type === "cursor") {
-            drawCursor(msg.user_id, msg.username || "匿名", msg.cursor.position, msg.color);
+            const position = msg.payload?.index || msg.cursor?.position || 0;
+            drawCursor(msg.user_id, msg.username || msg.user || "匿名", position, msg.color);
         }
-        if (msg.type === "user_joined") {
-            console.log("用户加入:", msg.username);
+        if (msg.type === "user_joined" || (msg.type === "presence" && msg.action === "join")) {
+            console.log("用户加入:", msg.username || msg.user);
+        }
+        if (msg.type === "error") {
+            console.error("服务器错误:", msg.payload?.message || msg.message);
         }
     };
 
-    ws.onopen = () => console.log("WS 已连接");
-    ws.onerror = (e) => console.error(e);
-    ws.onclose = () => console.log("WS 断开");
+    ws.onopen = () => {
+        console.log("WS 已连接");
+        reconnectAttempts = 0; // 重置重连计数
+        updateConnectionStatus('connected');
+    };
+    
+    ws.onerror = (e) => {
+        console.error("WebSocket 错误:", e);
+        updateConnectionStatus('disconnected');
+    };
+    
+    ws.onclose = (event) => {
+        console.log("WS 断开", event.code, event.reason);
+        updateConnectionStatus('disconnected');
+        
+        // 尝试自动重连
+        if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+            reconnectAttempts++;
+            updateConnectionStatus('reconnecting');
+            console.log(`尝试重连... (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
+            setTimeout(() => {
+                connect(documentId, currentToken);
+            }, RECONNECT_INTERVAL);
+        } else {
+            console.log("已达到最大重连次数");
+            alert('连接已断开，请刷新页面重新连接');
+        }
+    };
 }
 
 function setupEditor() {
