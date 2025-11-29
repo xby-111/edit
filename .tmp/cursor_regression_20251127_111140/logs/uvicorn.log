@@ -1,0 +1,74 @@
+INFO:     Started server process [15756]
+INFO:     Waiting for application startup.
+INFO:app.db.init_db:开始初始化数据库...
+INFO:app.db.session:尝试连接数据库 (尝试 1/3): host=120.46.143.126, port=5432, user=appuser, database=editdb, timeout=8s
+INFO:app.db.session:openGauss 连接创建成功
+WARNING:app.db.session:使用全局连接，仅建议用于脚本等非并发场景
+INFO:app.db.init_db:数据库连接成功
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+WebSocket 清理任务已启动
+WebSocket 心跳任务已启动
+INFO:     127.0.0.1:10413 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:2891 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:2892 - "GET /api/docs HTTP/1.1" 200 OK
+INFO:app.db.session:尝试连接数据库 (尝试 1/3): host=120.46.143.126, port=5432, user=appuser, database=editdb, timeout=8s
+INFO:app.db.session:openGauss 连接创建成功
+ERROR:app.db.session:Database connection error: [{'type': 'value_error', 'loc': ('body',), 'msg': 'Value error, 邮箱或手机号至少需要提供一个', 'input': {'username': '', 'password': ''}, 'ctx': {'error': ValueError('邮箱或手机号至少需要提供一个')}}]
+Traceback (most recent call last):
+  File "D:\Projects\edit\app\db\session.py", line 377, in get_db
+    yield OpenGaussCompat(conn)  # 关键：返回兼容层包装的连接
+  File "D:\Projects\edit\venv\lib\site-packages\fastapi\concurrency.py", line 27, in contextmanager_in_threadpool
+    yield await run_in_threadpool(cm.__enter__)
+  File "D:\Projects\edit\venv\lib\site-packages\fastapi\routing.py", line 111, in app
+    response = await f(request)
+  File "D:\Projects\edit\venv\lib\site-packages\fastapi\routing.py", line 432, in app
+    raise validation_error
+fastapi.exceptions.RequestValidationError: [{'type': 'value_error', 'loc': ('body',), 'msg': 'Value error, 邮箱或手机号至少需要提供一个', 'input': {'username': '', 'password': ''}, 'ctx': {'error': ValueError('邮箱或手机号至少需要提供一个')}}]
+INFO:     127.0.0.1:2893 - "POST /api/v1/auth/register HTTP/1.1" 422 Unprocessable Entity
+INFO:app.db.session:尝试连接数据库 (尝试 1/3): host=120.46.143.126, port=5432, user=appuser, database=editdb, timeout=8s
+INFO:app.db.session:openGauss 连接创建成功
+ERROR:app.db.session:Database connection error: [{'type': 'missing', 'loc': ('body', 'username'), 'msg': 'Field required', 'input': None}, {'type': 'missing', 'loc': ('body', 'password'), 'msg': 'Field required', 'input': None}]
+Traceback (most recent call last):
+  File "D:\Projects\edit\app\db\session.py", line 377, in get_db
+    yield OpenGaussCompat(conn)  # 关键：返回兼容层包装的连接
+  File "D:\Projects\edit\venv\lib\site-packages\fastapi\concurrency.py", line 27, in contextmanager_in_threadpool
+    yield await run_in_threadpool(cm.__enter__)
+  File "D:\Projects\edit\venv\lib\site-packages\fastapi\routing.py", line 111, in app
+    response = await f(request)
+  File "D:\Projects\edit\venv\lib\site-packages\fastapi\routing.py", line 432, in app
+    raise validation_error
+fastapi.exceptions.RequestValidationError: [{'type': 'missing', 'loc': ('body', 'username'), 'msg': 'Field required', 'input': None}, {'type': 'missing', 'loc': ('body', 'password'), 'msg': 'Field required', 'input': None}]
+INFO:     127.0.0.1:2897 - "POST /api/v1/auth/token HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:2900 - "GET /api/v1/documents HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:6198 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:6199 - "GET /api/docs HTTP/1.1" 200 OK
+INFO:app.db.session:尝试连接数据库 (尝试 1/3): host=120.46.143.126, port=5432, user=appuser, database=editdb, timeout=8s
+INFO:app.db.session:openGauss 连接创建成功
+ERROR:app.db.session:Database connection error: [{'type': 'value_error', 'loc': ('body',), 'msg': 'Value error, 邮箱或手机号至少需要提供一个', 'input': {'username': '', 'password': ''}, 'ctx': {'error': ValueError('邮箱或手机号至少需要提供一个')}}]
+Traceback (most recent call last):
+  File "D:\Projects\edit\app\db\session.py", line 377, in get_db
+    yield OpenGaussCompat(conn)  # 关键：返回兼容层包装的连接
+  File "D:\Projects\edit\venv\lib\site-packages\fastapi\concurrency.py", line 27, in contextmanager_in_threadpool
+    yield await run_in_threadpool(cm.__enter__)
+  File "D:\Projects\edit\venv\lib\site-packages\fastapi\routing.py", line 111, in app
+    response = await f(request)
+  File "D:\Projects\edit\venv\lib\site-packages\fastapi\routing.py", line 432, in app
+    raise validation_error
+fastapi.exceptions.RequestValidationError: [{'type': 'value_error', 'loc': ('body',), 'msg': 'Value error, 邮箱或手机号至少需要提供一个', 'input': {'username': '', 'password': ''}, 'ctx': {'error': ValueError('邮箱或手机号至少需要提供一个')}}]
+INFO:     127.0.0.1:6200 - "POST /api/v1/auth/register HTTP/1.1" 422 Unprocessable Entity
+INFO:app.db.session:尝试连接数据库 (尝试 1/3): host=120.46.143.126, port=5432, user=appuser, database=editdb, timeout=8s
+INFO:app.db.session:openGauss 连接创建成功
+ERROR:app.db.session:Database connection error: [{'type': 'missing', 'loc': ('body', 'username'), 'msg': 'Field required', 'input': None}, {'type': 'missing', 'loc': ('body', 'password'), 'msg': 'Field required', 'input': None}]
+Traceback (most recent call last):
+  File "D:\Projects\edit\app\db\session.py", line 377, in get_db
+    yield OpenGaussCompat(conn)  # 关键：返回兼容层包装的连接
+  File "D:\Projects\edit\venv\lib\site-packages\fastapi\concurrency.py", line 27, in contextmanager_in_threadpool
+    yield await run_in_threadpool(cm.__enter__)
+  File "D:\Projects\edit\venv\lib\site-packages\fastapi\routing.py", line 111, in app
+    response = await f(request)
+  File "D:\Projects\edit\venv\lib\site-packages\fastapi\routing.py", line 432, in app
+    raise validation_error
+fastapi.exceptions.RequestValidationError: [{'type': 'missing', 'loc': ('body', 'username'), 'msg': 'Field required', 'input': None}, {'type': 'missing', 'loc': ('body', 'password'), 'msg': 'Field required', 'input': None}]
+INFO:     127.0.0.1:6204 - "POST /api/v1/auth/token HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:6220 - "GET /api/v1/documents HTTP/1.1" 401 Unauthorized

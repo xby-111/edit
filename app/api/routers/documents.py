@@ -881,7 +881,7 @@ async def update_task_endpoint(
         
     try:
         due = getattr(task_in, "due_at", None) or getattr(task_in, "due_date", None) or getattr(task_in, "deadline", None)
-        return update_task(db, task_id, status=task_in.status, due_at=due, assignee_id=task_in.assignee_id)
+        return update_task(db, task_id, status=task_in.status, due_at=due, assignee_id=task_in.assigned_to)
     except Exception as e:
         logger.error("更新任务失败: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail="更新任务失败")

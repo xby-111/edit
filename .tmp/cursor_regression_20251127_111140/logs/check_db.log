@@ -1,0 +1,22 @@
+=== 运行 check_db.py ===
+命令: "D:\Projects\edit\venv\Scripts\python.exe" scripts\check_db.py
+🔍 开始检查数据库表结构...
+✅ comments 表已包含 updated_at 列，无需修复
+✅ 所有记录的 updated_at 都已正确设置
+✅ document_collaborators 表已存在，无需创建
+✅ notifications 表已存在
+✅ 索引 idx_notifications_user_created 已存在
+✅ 索引 idx_notifications_user_unread 已存在
+✅ 索引 idx_notifications_user_type 已存在
+✅ users 表已包含 role 列，无需添加
+✅ idx_users_role 索引已存在
+✅ audit_logs 表已存在
+✅ 索引 idx_audit_logs_user_created 已存在
+✅ 索引 idx_audit_logs_action_created 已存在
+✅ 索引 idx_audit_logs_resource 已存在
+✅ user_feedback 表已存在
+✅ 索引 idx_user_feedback_created 已存在
+✅ 索引 idx_user_feedback_user_created 已存在
+✅ system_settings 表已存在
+🎉 数据库自检完成
+
