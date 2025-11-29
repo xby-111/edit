@@ -1,6 +1,7 @@
 """
 文档管理路由 - 统一使用 Service 层
 """
+import io
 import logging
 import re
 from typing import List, Optional
@@ -51,6 +52,12 @@ from app.services.audit_service import log_action
 from app.services.settings_service import is_feature_enabled
 from app.services.comment_service import create_comment, list_comments
 from app.services.task_service import create_task, list_tasks, update_task
+
+# PDF/Word 导入导出依赖
+from xhtml2pdf import pisa
+from docx import Document as DocxDocument
+from docx.shared import Pt
+import pdfplumber
 
 logger = logging.getLogger(__name__)
 
@@ -320,8 +327,6 @@ async def export_document_endpoint(
             )
         elif format.lower() == 'pdf':
             # PDF 导出：使用 xhtml2pdf 将 HTML 转换为 PDF
-            import io
-            from xhtml2pdf import pisa
             
             # 包装 HTML 内容，确保正确的编码和样式
             html_template = f"""
@@ -367,9 +372,6 @@ async def export_document_endpoint(
             )
         elif format.lower() == 'docx' or format.lower() == 'word':
             # Word 导出：使用 python-docx 将 HTML 转换为 DOCX
-            import io
-            from docx import Document as DocxDocument
-            from docx.shared import Pt
             
             doc = DocxDocument()
             
@@ -442,8 +444,6 @@ async def import_document_endpoint(
             html_content = content.decode('utf-8')
         elif file.filename.endswith('.docx'):
             # Word 文档导入：使用 python-docx 读取
-            import io
-            from docx import Document as DocxDocument
             
             docx_buffer = io.BytesIO(content)
             doc = DocxDocument(docx_buffer)
@@ -466,8 +466,6 @@ async def import_document_endpoint(
             html_content = '\n'.join(html_parts)
         elif file.filename.endswith('.pdf'):
             # PDF 文档导入：使用 pdfplumber 提取文本
-            import io
-            import pdfplumber
             
             pdf_buffer = io.BytesIO(content)
             html_parts = []
