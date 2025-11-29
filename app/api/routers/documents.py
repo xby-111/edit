@@ -56,7 +56,6 @@ from app.services.task_service import create_task, list_tasks, update_task
 # PDF/Word 导入导出依赖
 from xhtml2pdf import pisa
 from docx import Document as DocxDocument
-from docx.shared import Pt
 import pdfplumber
 
 logger = logging.getLogger(__name__)
@@ -375,7 +374,7 @@ async def export_document_endpoint(
             
             doc = DocxDocument()
             
-            # 将 HTML 转换为纯文本（简化处理）
+            # 将 HTML 转换为 Markdown 格式（用于提取结构化内容）
             text_content = htmlToMarkdown(content)
             
             # 按段落添加内容
