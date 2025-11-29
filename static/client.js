@@ -1,48 +1,52 @@
 // API 客户端 - 处理用户认证和文档管理
 class ApiClient {
     constructor() {
-        this.baseURL = '';
+        this. baseURL = '';
         this.token = localStorage.getItem('access_token') || '';
         this.username = localStorage.getItem('username') || '';
     }
 
     // 设置认证 token
-    setToken(token, username) {
+    setToken(token, username, userId) {
         this.token = token;
         this.username = username;
         localStorage.setItem('access_token', token);
-        localStorage.setItem('username', username);
+        localStorage. setItem('username', username);
+        if (userId) {
+            localStorage.setItem('user_id', userId);
+        }
     }
 
     // 清除认证信息
     clearAuth() {
         this.token = '';
         this.username = '';
-        localStorage.removeItem('access_token');
+        localStorage. removeItem('access_token');
         localStorage.removeItem('username');
+        localStorage. removeItem('user_id');
     }
 
     // 通用请求方法
     async request(endpoint, options = {}) {
-        const url = `${this.baseURL}/api/v1${endpoint}`;
+        const url = `${this. baseURL}/api/v1${endpoint}`;
         const config = {
             headers: {
                 'Content-Type': 'application/json',
-                ...options.headers
+                ... options.headers
             },
-            ...options
+            ... options
         };
 
         // 如果有 token，添加到请求头
         if (this.token) {
-            config.headers.Authorization = `Bearer ${this.token}`;
+            config.headers.Authorization = `Bearer ${this. token}`;
         }
 
         try {
             const response = await fetch(url, config);
-            const data = await response.json();
+            const data = await response. json();
 
-            if (!response.ok) {
+            if (! response.ok) {
                 // 如果是认证错误，清除本地 token
                 if (response.status === 401) {
                     this.clearAuth();
@@ -84,7 +88,8 @@ class ApiClient {
         }
 
         const data = await response.json();
-        this.setToken(data.access_token, username);
+        // 传递 user_id 到 setToken 方法，假设后端返回 user_id 字段
+        this.setToken(data.access_token, username, data.user_id);
         return data;
     }
 
@@ -120,7 +125,7 @@ class ApiClient {
     async updateDocument(id, data) {
         return this.request(`/documents/${id}`, {
             method: 'PUT',
-            body: JSON.stringify(data)
+            body: JSON. stringify(data)
         });
     }
 
@@ -152,7 +157,7 @@ class ApiClient {
 
     // 更新模板
     async updateTemplate(id, template) {
-        return this.request(`/templates/${id}`, {
+        return this. request(`/templates/${id}`, {
             method: 'PUT',
             body: JSON.stringify(template)
         });
@@ -160,7 +165,7 @@ class ApiClient {
 
     // 删除模板
     async deleteTemplate(id) {
-        return this.request(`/templates/${id}`, {
+        return this. request(`/templates/${id}`, {
             method: 'DELETE'
         });
     }
@@ -178,7 +183,7 @@ class ApiClient {
 
     // 获取标签列表
     async getTags() {
-        return this.request('/tags');
+        return this. request('/tags');
     }
 
     // 锁定文档
@@ -199,19 +204,19 @@ class ApiClient {
     async exportDocument(id, format = 'html') {
         // 确保 format 是字符串，防止传入 Promise
         const formatStr = String(format);
-        const validFormats = ['html', 'markdown'];
+        const validFormats = ['html', 'markdown', 'pdf', 'docx'];
         if (!validFormats.includes(formatStr)) {
             throw new Error(`无效的导出格式: ${formatStr}。支持的格式: ${validFormats.join(', ')}`);
         }
 
-        const response = await fetch(`${this.baseURL}/api/v1/documents/${id}/export?format=${formatStr}`, {
+        const response = await fetch(`${this.baseURL}/api/v1/documents/${id}/export? format=${formatStr}`, {
             method: 'GET',
             headers: {
-                'Authorization': `Bearer ${this.token}`
+                'Authorization': `Bearer ${this. token}`
             }
         });
         
-        if (!response.ok) {
+        if (! response.ok) {
             throw new Error('导出失败');
         }
         
@@ -232,12 +237,12 @@ class ApiClient {
             body: formData
         });
         
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || '导入失败');
+        if (!response. ok) {
+            const error = await response. json();
+            throw new Error(error. detail || '导入失败');
         }
         
-        return response.json();
+        return response. json();
     }
 }
 
@@ -247,18 +252,18 @@ const api = new ApiClient();
 // UI 控制函数
 function showLoginForm() {
     document.getElementById('login-section').style.display = 'block';
-    document.getElementById('register-section').style.display = 'none';
-    document.getElementById('documents-section').style.display = 'none';
+    document.getElementById('register-section').style. display = 'none';
+    document. getElementById('documents-section').style. display = 'none';
 }
 
 function showRegisterForm() {
     document.getElementById('login-section').style.display = 'none';
     document.getElementById('register-section').style.display = 'block';
-    document.getElementById('documents-section').style.display = 'none';
+    document.getElementById('documents-section'). style.display = 'none';
 }
 
 function showDocumentsSection() {
-    document.getElementById('login-section').style.display = 'none';
+    document. getElementById('login-section').style.display = 'none';
     document.getElementById('register-section').style.display = 'none';
     document.getElementById('documents-section').style.display = 'block';
 }
@@ -268,7 +273,7 @@ function showError(elementId, message) {
     element.textContent = message;
     element.style.display = 'block';
     setTimeout(() => {
-        element.style.display = 'none';
+        element. style.display = 'none';
     }, 5000);
 }
 
@@ -282,13 +287,13 @@ function formatDate(dateString) {
 async function loadDocuments(folder = null) {
     try {
         const [ownedDocuments, sharedDocuments] = await Promise.all([
-            api.getDocuments(folder),
+            api. getDocuments(folder),
             api.getSharedDocuments()
         ]);
         
         // 分别显示我的文档和共享文档
-        renderDocumentList(ownedDocuments.map(doc => ({ ...doc, is_shared: false })));
-        renderSharedDocumentList(sharedDocuments.map(doc => ({ ...doc, is_shared: true })));
+        renderDocumentList(ownedDocuments. map(doc => ({ ...doc, is_shared: false })));
+        renderSharedDocumentList(sharedDocuments. map(doc => ({ ...doc, is_shared: true })));
     } catch (error) {
         console.error('加载文档列表失败:', error);
         showError('document-error', '加载文档列表失败: ' + error.message);
@@ -300,15 +305,15 @@ const renderSharedDocumentList = (documents) => {
     const sharedDocumentList = document.getElementById('shared-document-list');
     const noSharedDocuments = document.getElementById('no-shared-documents');
 
-    if (!sharedDocumentList || !noSharedDocuments) return;
+    if (! sharedDocumentList || !noSharedDocuments) return;
 
     if (documents.length === 0) {
-        sharedDocumentList.innerHTML = '';
+        sharedDocumentList. innerHTML = '';
         noSharedDocuments.style.display = 'block';
     } else {
-        noSharedDocuments.style.display = 'none';
+        noSharedDocuments. style.display = 'none';
         sharedDocumentList.innerHTML = documents.map(doc => {
-            const tags = doc.tags ? doc.tags.split(',').map(tag => `<span class="tag">${tag.trim()}</span>`).join('') : '';
+            const tags = doc.tags ?  doc.tags.split(',').map(tag => `<span class="tag">${tag. trim()}</span>`).join('') : '';
             const lockStatus = doc.is_locked ? '<span style="color: #f44336;">🔒 已锁定</span>' : '';
             const sharedBadge = '<span style="background-color: #4CAF50; color: white; padding: 2px 6px; border-radius: 3px; font-size: 12px; margin-left: 5px;">共享</span>';
             const ownerInfo = `<p style="font-size: 12px; color: #666;">所有者ID: ${doc.owner_id}</p>`;
@@ -317,17 +322,17 @@ const renderSharedDocumentList = (documents) => {
                 <div class="document-item">
                     <div class="document-info">
                         <h3>${doc.title} ${lockStatus} ${sharedBadge}</h3>
-                        <p>文件夹: ${doc.folder_name || '未分类'} | 标签: ${tags || '无'}</p>
+                        <p>文件夹: ${doc. folder_name || '未分类'} | 标签: ${tags || '无'}</p>
                         <p>创建时间: ${formatDate(doc.created_at)} | 更新时间: ${formatDate(doc.updated_at)}</p>
                         ${ownerInfo}
                     </div>
                     <div class="document-actions">
-                        <button class="btn-small btn-primary" onclick="openDocument(${doc.id})" ${doc.is_locked ? 'disabled' : ''}>打开协同编辑</button>
-                        <button class="btn-small btn-info" onclick="exportDocument(${doc.id})">导出</button>
+                        <button class="btn-small btn-primary" onclick="openDocument(${doc. id})" ${doc.is_locked ? 'disabled' : ''}>打开协同编辑</button>
+                        <button class="btn-small btn-info" onclick="exportDocument(${doc. id})">导出</button>
                     </div>
                 </div>
             `;
-        }).join('');
+        }). join('');
     }
 };
 
@@ -341,9 +346,9 @@ const renderDocumentList = (documents) => {
     } else {
         noDocuments.style.display = 'none';
         documentList.innerHTML = documents.map(doc => {
-            const tags = doc.tags ? doc.tags.split(',').map(tag => `<span class="tag">${tag.trim()}</span>`).join('') : '';
+            const tags = doc. tags ? doc.tags.split(',').map(tag => `<span class="tag">${tag.trim()}</span>`).join('') : '';
             const lockStatus = doc.is_locked ? '<span style="color: #f44336;">🔒 已锁定</span>' : '';
-            const sharedBadge = doc.is_shared ? '<span style="background-color: #4CAF50; color: white; padding: 2px 6px; border-radius: 3px; font-size: 12px; margin-left: 5px;">共享</span>' : '';
+            const sharedBadge = doc.is_shared ?  '<span style="background-color: #4CAF50; color: white; padding: 2px 6px; border-radius: 3px; font-size: 12px; margin-left: 5px;">共享</span>' : '';
             const ownerInfo = doc.is_shared ? `<p style="font-size: 12px; color: #666;">所有者ID: ${doc.owner_id}</p>` : '';
             
             return `
@@ -351,15 +356,15 @@ const renderDocumentList = (documents) => {
                     <div class="document-info">
                         <h3>${doc.title} ${lockStatus} ${sharedBadge}</h3>
                         <p>文件夹: ${doc.folder_name || '未分类'} | 标签: ${tags || '无'}</p>
-                        <p>创建时间: ${formatDate(doc.created_at)} | 更新时间: ${formatDate(doc.updated_at)}</p>
+                        <p>创建时间: ${formatDate(doc.created_at)} | 更新时间: ${formatDate(doc. updated_at)}</p>
                         ${ownerInfo}
                     </div>
                     <div class="document-actions">
-                        <button class="btn-small btn-primary" onclick="openDocument(${doc.id})" ${doc.is_locked ? 'disabled' : ''}>打开协同编辑</button>
+                        <button class="btn-small btn-primary" onclick="openDocument(${doc.id})" ${doc. is_locked ? 'disabled' : ''}>打开协同编辑</button>
                         <button class="btn-small btn-info" onclick="exportDocument(${doc.id})">导出</button>
-                        ${!doc.is_shared && !doc.is_locked ? `<button class="btn-small btn-warning" onclick="lockDocument(${doc.id})">锁定</button>` : ''}
-                        ${!doc.is_shared && doc.is_locked && doc.locked_by === getCurrentUserId() ? `<button class="btn-small btn-success" onclick="unlockDocument(${doc.id})">解锁</button>` : ''}
-                        ${!doc.is_shared ? `<button class="btn-small btn-danger" onclick="deleteDocument(${doc.id})">删除</button>` : ''}
+                        ${! doc.is_shared && ! doc.is_locked ? `<button class="btn-small btn-warning" onclick="lockDocument(${doc.id})">锁定</button>` : ''}
+                        ${!doc.is_shared && doc.is_locked && doc.locked_by === getCurrentUserId() ? `<button class="btn-small btn-success" onclick="unlockDocument(${doc. id})">解锁</button>` : ''}
+                        ${! doc.is_shared ?  `<button class="btn-small btn-danger" onclick="deleteDocument(${doc.id})">删除</button>` : ''}
                     </div>
                 </div>
             `;
@@ -371,8 +376,8 @@ const renderDocumentList = (documents) => {
 async function searchDocuments() {
     const keyword = document.getElementById('search-keyword').value.trim();
     const tags = document.getElementById('search-tags').value.trim();
-    const folder = document.getElementById('search-folder').value;
-    const sortBy = document.getElementById('search-sort').value;
+    const folder = document.getElementById('search-folder'). value;
+    const sortBy = document.getElementById('search-sort'). value;
     const order = document.getElementById('search-order').value;
     
     const params = {};
@@ -390,7 +395,7 @@ async function searchDocuments() {
         const documentList = document.getElementById('document-list');
         const resultCount = document.createElement('div');
         resultCount.style.cssText = 'margin-bottom: 15px; padding: 10px; background-color: #e3f2fd; border-radius: 5px; color: #1976d2;';
-        resultCount.textContent = `找到 ${documents.length} 个文档`;
+        resultCount.textContent = `找到 ${documents. length} 个文档`;
         documentList.insertBefore(resultCount, documentList.firstChild);
     } catch (error) {
         console.error('搜索文档失败:', error);
@@ -409,7 +414,7 @@ async function loadFilters() {
         // 更新文件夹下拉框
         const folderSelect = document.getElementById('search-folder');
         if (folderSelect) {
-            folderSelect.innerHTML = '<option value="">所有文件夹</option>' + 
+            folderSelect. innerHTML = '<option value="">所有文件夹</option>' + 
                 folders.map(folder => `<option value="${folder}">${folder}</option>`).join('');
         }
         
@@ -417,7 +422,7 @@ async function loadFilters() {
         const tagsContainer = document.getElementById('tags-container');
         if (tagsContainer && tags.length > 0) {
             tagsContainer.innerHTML = '<h4>标签:</h4>' + 
-                tags.map(tag => `<span class="tag clickable-tag" onclick="addTagToSearch('${tag}')">${tag}</span>`).join('');
+                tags.map(tag => `<span class="tag clickable-tag" onclick="addTagToSearch('${tag}')">${tag}</span>`). join('');
         }
     } catch (error) {
         console.error('加载过滤器失败:', error);
@@ -426,12 +431,12 @@ async function loadFilters() {
 
 // 添加标签到搜索
 function addTagToSearch(tag) {
-    const tagsInput = document.getElementById('search-tags');
-    const currentTags = tagsInput.value.split(',').map(t => t.trim()).filter(t => t);
+    const tagsInput = document. getElementById('search-tags');
+    const currentTags = tagsInput.value.split(',').map(t => t.trim()). filter(t => t);
     
-    if (!currentTags.includes(tag)) {
-        currentTags.push(tag);
-        tagsInput.value = currentTags.join(', ');
+    if (! currentTags.includes(tag)) {
+        currentTags. push(tag);
+        tagsInput. value = currentTags.join(', ');
     }
 }
 
@@ -441,7 +446,7 @@ async function lockDocument(documentId) {
         await api.lockDocument(documentId);
         await loadDocuments(); // 重新加载文档列表
     } catch (error) {
-        console.error('锁定文档失败:', error);
+        console. error('锁定文档失败:', error);
         alert('锁定文档失败: ' + error.message);
     }
 }
@@ -457,20 +462,25 @@ async function unlockDocument(documentId) {
     }
 }
 
-// 获取当前用户ID（简化实现）
+// 获取当前用户ID
 function getCurrentUserId() {
-    // 这里应该从认证信息中获取，暂时返回一个模拟值
-    return localStorage.getItem('user_id') || 'current_user';
+    // 从 localStorage 获取 user_id，并转换为整数以确保与后端返回的 locked_by 字段类型一致
+    const userId = localStorage.getItem('user_id');
+    if (userId) {
+        const parsedId = parseInt(userId, 10);
+        return isNaN(parsedId) ? null : parsedId;
+    }
+    return null;
 }
 
 // 导出文档
 async function exportDocument(documentId) {
     try {
         // 显示格式选择对话框
-        const format = showExportDialog();
+        const format = await showExportDialog();
         if (!format) return;
         
-        const response = await api.exportDocument(documentId, format);
+        const response = await api. exportDocument(documentId, format);
         
         // 创建下载链接
         const blob = await response.blob();
@@ -479,21 +489,21 @@ async function exportDocument(documentId) {
         a.href = url;
         
         // 从响应头获取文件名
-        const contentDisposition = response.headers.get('content-disposition');
+        const contentDisposition = response. headers.get('content-disposition');
         let filename = 'document';
         if (contentDisposition) {
-            const matches = contentDisposition.match(/filename=(.+)/);
+            const matches = contentDisposition. match(/filename=(. +)/);
             if (matches) filename = matches[1];
         }
         
         a.download = filename;
         document.body.appendChild(a);
         a.click();
-        document.body.removeChild(a);
+        document.body. removeChild(a);
         window.URL.revokeObjectURL(url);
         
     } catch (error) {
-        console.error('导出文档失败:', error);
+        console. error('导出文档失败:', error);
         alert('导出文档失败: ' + error.message);
     }
 }
@@ -529,6 +539,8 @@ function showExportDialog() {
             <div style="margin: 20px 0;">
                 <button id="export-html" style="margin: 0 10px; padding: 10px 20px;">HTML</button>
                 <button id="export-markdown" style="margin: 0 10px; padding: 10px 20px;">Markdown</button>
+                <button id="export-pdf" style="margin: 0 10px; padding: 10px 20px;">PDF</button>
+                <button id="export-word" style="margin: 0 10px; padding: 10px 20px;">Word</button>
                 <button id="export-cancel" style="margin: 0 10px; padding: 10px 20px; background-color: #6c757d;">取消</button>
             </div>
         `;
@@ -542,18 +554,28 @@ function showExportDialog() {
         });
         
         document.getElementById('export-markdown').addEventListener('click', () => {
-            document.body.removeChild(modal);
+            document.body. removeChild(modal);
             resolve('markdown');
         });
         
-        document.getElementById('export-cancel').addEventListener('click', () => {
+        document. getElementById('export-pdf').addEventListener('click', () => {
             document.body.removeChild(modal);
+            resolve('pdf');
+        });
+        
+        document.getElementById('export-word'). addEventListener('click', () => {
+            document.body.removeChild(modal);
+            resolve('docx');
+        });
+        
+        document.getElementById('export-cancel').addEventListener('click', () => {
+            document.body. removeChild(modal);
             resolve(null);
         });
         
         // 点击背景关闭
         modal.addEventListener('click', function(e) {
-            if (e.target === modal) {
+            if (e. target === modal) {
                 document.body.removeChild(modal);
                 resolve(null);
             }
@@ -565,16 +587,16 @@ function showExportDialog() {
 async function importDocument() {
     try {
         // 创建文件输入元素
-        const fileInput = document.createElement('input');
+        const fileInput = document. createElement('input');
         fileInput.type = 'file';
-        fileInput.accept = '.md,.txt,.html';
+        fileInput. accept = '.md,. txt,.html,. docx,. pdf';
         fileInput.style.display = 'none';
         
         fileInput.addEventListener('change', async function(e) {
             const file = e.target.files[0];
-            if (!file) return;
+            if (! file) return;
             
-            const title = prompt('请输入文档标题:', file.name.replace(/\.[^/.]+$/, ''));
+            const title = prompt('请输入文档标题:', file.name. replace(/\.[^/.]+$/, ''));
             if (!title) return;
             
             try {
@@ -589,7 +611,7 @@ async function importDocument() {
         
         document.body.appendChild(fileInput);
         fileInput.click();
-        document.body.removeChild(fileInput);
+        document. body.removeChild(fileInput);
         
     } catch (error) {
         console.error('导入文档失败:', error);
@@ -601,12 +623,12 @@ async function importDocument() {
 function openDocument(documentId) {
     const token = api.token;
     const username = api.username;
-    window.location.href = `/test_collab.html?doc_id=${documentId}&token=${encodeURIComponent(token)}&username=${encodeURIComponent(username)}`;
+    window.location.href = `/test_collab. html? doc_id=${documentId}&token=${encodeURIComponent(token)}&username=${encodeURIComponent(username)}`;
 }
 
 // 删除文档
 async function deleteDocument(documentId) {
-    if (!confirm('确定要删除这个文档吗？此操作不可恢复。')) {
+    if (! confirm('确定要删除这个文档吗？此操作不可恢复。')) {
         return;
     }
 
@@ -626,7 +648,7 @@ async function createNewDocument() {
         const templates = await api.getTemplates();
         showTemplateDialog(templates);
     } catch (error) {
-        console.error('加载模板失败:', error);
+        console. error('加载模板失败:', error);
         // 如果加载模板失败，直接创建空白文档
         createDocumentFromTemplate(null);
     }
@@ -635,8 +657,8 @@ async function createNewDocument() {
 // 显示模板选择对话框
 function showTemplateDialog(templates) {
     // 创建模态对话框
-    const modal = document.createElement('div');
-    modal.style.cssText = `
+    const modal = document. createElement('div');
+    modal.style. cssText = `
         position: fixed;
         top: 0;
         left: 0;
@@ -674,19 +696,19 @@ function showTemplateDialog(templates) {
     document.body.appendChild(modal);
     
     // 渲染模板列表
-    const templateList = document.getElementById('template-list');
+    const templateList = document. getElementById('template-list');
     const categories = {};
     
     // 按分类组织模板
     templates.forEach(template => {
-        if (!categories[template.category]) {
+        if (!categories[template. category]) {
             categories[template.category] = [];
         }
         categories[template.category].push(template);
     });
     
     let html = '';
-    Object.keys(categories).forEach(category => {
+    Object.keys(categories). forEach(category => {
         html += `<h3 style="color: #666; margin-bottom: 10px;">${getCategoryName(category)}</h3>`;
         html += '<div style="margin-bottom: 20px;">';
         
@@ -698,10 +720,10 @@ function showTemplateDialog(templates) {
                     padding: 15px;
                     margin-bottom: 10px;
                     cursor: pointer;
-                    transition: background-color 0.2s;
+                    transition: background-color 0. 2s;
                 " data-template-id="${template.id}" data-template-content="${encodeURIComponent(template.content)}">
                     <h4 style="margin: 0 0 5px 0; color: #333;">${template.name}</h4>
-                    <p style="margin: 0; color: #666; font-size: 14px;">${template.description || '无描述'}</p>
+                    <p style="margin: 0; color: #666; font-size: 14px;">${template. description || '无描述'}</p>
                 </div>
             `;
         });
@@ -728,7 +750,7 @@ function showTemplateDialog(templates) {
     templateList.innerHTML = html;
     
     // 添加交互效果
-    document.querySelectorAll('.template-item').forEach(item => {
+    document. querySelectorAll('.template-item').forEach(item => {
         item.addEventListener('mouseenter', function() {
             this.style.backgroundColor = '#f8f9fa';
         });
@@ -739,7 +761,7 @@ function showTemplateDialog(templates) {
         
         item.addEventListener('click', function() {
             const templateId = this.dataset.templateId;
-            const templateContent = this.dataset.templateContent ? decodeURIComponent(this.dataset.templateContent) : '';
+            const templateContent = this.dataset.templateContent ?  decodeURIComponent(this.dataset. templateContent) : '';
             createDocumentFromTemplate(templateId, templateContent);
             document.body.removeChild(modal);
         });
@@ -747,7 +769,7 @@ function showTemplateDialog(templates) {
     
     // 取消按钮
     document.getElementById('cancel-template').addEventListener('click', function() {
-        document.body.removeChild(modal);
+        document.body. removeChild(modal);
     });
     
     // 点击背景关闭
@@ -787,12 +809,13 @@ async function createDocumentFromTemplate(templateId, templateContent) {
 async function checkAuthStatus() {
     const token = localStorage.getItem('access_token');
     const username = localStorage.getItem('username');
+    const userId = localStorage.getItem('user_id');
 
     if (token && username) {
         try {
             // 验证 token 是否有效
             await api.getCurrentUser();
-            api.setToken(token, username);
+            api.setToken(token, username, userId);
             document.getElementById('current-username').textContent = username;
             showDocumentsSection();
             await loadDocuments();
@@ -810,30 +833,30 @@ async function checkAuthStatus() {
 // 切换高级搜索
 function toggleAdvancedSearch() {
     const advancedSearch = document.getElementById('advanced-search');
-    advancedSearch.style.display = advancedSearch.style.display === 'none' ? 'block' : 'none';
+    advancedSearch.style.display = advancedSearch.style. display === 'none' ? 'block' : 'none';
 }
 
 // 切换文件夹
 function switchFolder(folder) {
     // 更新标签状态
     document.querySelectorAll('.folder-tab').forEach(tab => {
-        tab.classList.remove('active');
+        tab. classList.remove('active');
         if (tab.textContent === folder || '全部') {
-            tab.classList.add('active');
+            tab. classList.add('active');
         }
     });
     
     // 加载对应文件夹的文档
-    loadDocuments(folder === '全部' ? null : folder);
+    loadDocuments(folder === '全部' ?  null : folder);
 }
 
 // 事件监听器
 document.addEventListener('DOMContentLoaded', function() {
     // 登录表单
-    document.getElementById('login-form').addEventListener('submit', async function(e) {
+    document. getElementById('login-form').addEventListener('submit', async function(e) {
         e.preventDefault();
         const username = document.getElementById('username').value;
-        const password = document.getElementById('password').value;
+        const password = document.getElementById('password'). value;
 
         try {
             await api.login(username, password);
@@ -842,7 +865,7 @@ document.addEventListener('DOMContentLoaded', function() {
             await loadDocuments();
             await loadFilters(); // 加载过滤器
         } catch (error) {
-            showError('login-error', error.message);
+            showError('login-error', error. message);
         }
     });
 
@@ -866,19 +889,19 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     // 切换表单
-    document.getElementById('show-register').addEventListener('click', showRegisterForm);
+    document. getElementById('show-register').addEventListener('click', showRegisterForm);
     document.getElementById('show-login').addEventListener('click', showLoginForm);
 
     // 退出登录
-    document.getElementById('logout-btn').addEventListener('click', function() {
+    document. getElementById('logout-btn').addEventListener('click', function() {
         if (confirm('确定要退出登录吗？')) {
-            api.clearAuth();
+            api. clearAuth();
             showLoginForm();
         }
     });
 
     // 创建文档
-    document.getElementById('create-document-btn').addEventListener('click', createNewDocument);
+    document. getElementById('create-document-btn').addEventListener('click', createNewDocument);
 
     // 导入文档
     document.getElementById('import-document-btn').addEventListener('click', importDocument);
