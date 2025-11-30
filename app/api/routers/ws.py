@@ -207,7 +207,6 @@ async def document_collab_ws(
     websocket: WebSocket,
     document_id: int,
     token: str | None = Query(None),
-    username: str | None = Query(None)
 ):
     logger.info(f"WebSocket 连接请求: document_id={document_id}, token={'***' if token else 'None'}")
     
@@ -215,42 +214,40 @@ async def document_collab_ws(
     await websocket.accept()
     logger.debug("WebSocket 连接已接受")
     
-    # 如果提供了 token，必须验证；如果没有 token，允许匿名连接
-    token_username = None
-    if token:
-        # 验证token
-        try:
-            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-            token_username = payload.get("sub")
-            if not token_username:
-                logger.warning("WebSocket JWT 验证失败: Missing username in token")
-                await websocket.close(code=1008, reason="Invalid token: missing username")
-                return
-            logger.info(f"JWT 验证成功，用户: {token_username}")
-        except ExpiredSignatureError:
-            logger.warning("WebSocket JWT 验证失败: Token expired")
-            await websocket.close(code=1008, reason="Token expired")
-            return
-        except JWTError as e:
-            # 细分JWT错误类型
-            error_msg = str(e)
-            if "Invalid crypto padding" in error_msg or "Invalid base64-encoded string" in error_msg:
-                logger.warning("WebSocket JWT 验证失败: Invalid token format")
-                await websocket.close(code=1008, reason="Invalid token format")
-            else:
-                logger.warning(f"WebSocket JWT 验证失败: {e}")
-                await websocket.close(code=1008, reason="Invalid token")
-            return
-        except Exception as e:
-            logger.error(f"WebSocket JWT 验证出现未知错误")
-            await websocket.close(code=1011, reason="Internal server error")
-            return
-    else:
-        # 没有 token，允许匿名连接
-        logger.info("WebSocket 连接无 token，允许匿名连接")
-        token_username = None
+    if not token:
+        logger.warning("WebSocket 连接未提供 token，拒绝访问")
+        await websocket.close(code=1008, reason="Authentication required")
+        return
 
-    current_username = token_username or username or "匿名用户"
+    # 验证token
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        token_username = payload.get("sub")
+        if not token_username:
+            logger.warning("WebSocket JWT 验证失败: Missing username in token")
+            await websocket.close(code=1008, reason="Invalid token: missing username")
+            return
+        logger.info(f"JWT 验证成功，用户: {token_username}")
+    except ExpiredSignatureError:
+        logger.warning("WebSocket JWT 验证失败: Token expired")
+        await websocket.close(code=1008, reason="Token expired")
+        return
+    except JWTError as e:
+        # 细分JWT错误类型
+        error_msg = str(e)
+        if "Invalid crypto padding" in error_msg or "Invalid base64-encoded string" in error_msg:
+            logger.warning("WebSocket JWT 验证失败: Invalid token format")
+            await websocket.close(code=1008, reason="Invalid token format")
+        else:
+            logger.warning(f"WebSocket JWT 验证失败: {e}")
+            await websocket.close(code=1008, reason="Invalid token")
+        return
+    except Exception:
+        logger.error("WebSocket JWT 验证出现未知错误")
+        await websocket.close(code=1011, reason="Internal server error")
+        return
+
+    current_username = token_username
     
     # 为每个WebSocket创建独立的数据库连接
     db = None
@@ -266,30 +263,24 @@ async def document_collab_ws(
     
     # 从数据库查询用户ID（必须在connect之前完成）
     try:
-        if token_username:
-            user_rows = db.query("SELECT id FROM users WHERE username = %s LIMIT 1", (token_username,))
+        user_rows = db.query("SELECT id FROM users WHERE username = %s LIMIT 1", (token_username,))
+        
+        if not user_rows:
+            logger.warning(f"用户不存在: {token_username}，关闭连接")
+            try:
+                await websocket.close(code=1008, reason="User not found")
+            except Exception:
+                pass
+            close_connection_safely(db)
+            return
             
-            if not user_rows:
-                logger.warning(f"用户不存在: {token_username}，关闭连接")
-                try:
-                    await websocket.close(code=1008, reason="User not found")
-                except Exception:
-                    pass
-                close_connection_safely(db)
-                return
-                
-            user_id = user_rows[0][0]  # 获取用户ID
-        else:
-            # 匿名用户，user_id = 0
-            user_id = 0
-            logger.info("使用匿名用户连接，user_id=0")
+        user_id = user_rows[0][0]  # 获取用户ID
         
         # 先检查文档权限（在注册连接之前）
         from app.services.document_service import get_document_with_collaborators, check_document_permission
         permission = check_document_permission(db, document_id, user_id)
         
-        # 对于匿名用户，即使权限检查失败，也允许连接（不关闭）
-        if not permission["can_view"] and user_id != 0:
+        if not permission["can_view"]:
             logger.warning(f"用户 {user_id} 无权限访问文档 {document_id}，关闭连接")
             try:
                 await websocket.close(code=1008, reason="Access denied")
@@ -297,10 +288,6 @@ async def document_collab_ws(
                 pass
             close_connection_safely(db)
             return
-        elif not permission["can_view"] and user_id == 0:
-            # 匿名用户即使无权限也允许连接，但权限设为最小
-            logger.info(f"匿名用户连接文档 {document_id}，文档不存在或无权限，但允许连接")
-            permission = {"can_view": False, "can_edit": False, "is_owner": False}
         
         # 权限验证通过，现在可以安全地调用connect
         await manager.connect(document_id, websocket, current_username, user_id, db)
@@ -317,30 +304,17 @@ async def document_collab_ws(
                 "permissions": permission  # 发送权限信息
             })
         else:
-            # 对于匿名用户，即使文档不存在也允许连接保持
-            if user_id == 0:
-                logger.info(f"匿名用户连接文档 {document_id}，文档不存在，但允许连接保持")
-                # 发送一个空的 init 消息，表示连接成功但文档不存在
-                await websocket.send_json({
-                    "type": "init",
-                    "payload": {"html": ""},
-                    "doc_id": document_id,
-                    "user": "System",
-                    "ts": datetime.utcnow().isoformat(),
-                    "permissions": permission
-                })
-            else:
-                logger.warning(f"无法加载文档 {document_id} 的内容，关闭连接")
-                try:
-                    await websocket.close(code=1008, reason="Document not found")
-                except Exception:
-                    pass
-                # 如果连接已注册，需要清理
-                try:
-                    await manager.disconnect(document_id, websocket)
-                except Exception:
-                    pass
-                return
+            logger.warning(f"无法加载文档 {document_id} 的内容，关闭连接")
+            try:
+                await websocket.close(code=1008, reason="Document not found")
+            except Exception:
+                pass
+            # 如果连接已注册，需要清理
+            try:
+                await manager.disconnect(document_id, websocket)
+            except Exception:
+                pass
+            return
             
     except Exception as e:
         logger.exception(f"获取文档内容时出错")

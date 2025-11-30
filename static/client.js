@@ -623,7 +623,7 @@ async function importDocument() {
 function openDocument(documentId) {
     const token = api.token;
     const username = api.username;
-    window.location.href = `/test_collab. html? doc_id=${documentId}&token=${encodeURIComponent(token)}&username=${encodeURIComponent(username)}`;
+    window.location.href = `/test_collab.html?doc_id=${documentId}&token=${encodeURIComponent(token)}&username=${encodeURIComponent(username)}`;
 }
 
 // 删除文档

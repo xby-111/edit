@@ -12,6 +12,46 @@ const MAX_RECONNECT_ATTEMPTS = 10;
 const RECONNECT_INTERVAL = 3000; // 3 秒
 let currentToken = ""; // 保存当前 token 用于重连
 
+// 内容发送防抖定时器
+let contentSendTimer = null;
+const CONTENT_SEND_DEBOUNCE = 300; // 300ms 防抖
+
+// 标志：是否正在接收远程更新，防止循环
+let isReceivingRemoteUpdate = false;
+
+// 通过 WebSocket 发送内容更新
+function sendContentUpdate() {
+    // 如果正在接收远程更新，不发送，防止循环
+    if (isReceivingRemoteUpdate) {
+        console.log('正在接收远程更新，跳过发送');
+        return;
+    }
+    
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    
+    // 防抖处理
+    clearTimeout(contentSendTimer);
+    contentSendTimer = setTimeout(() => {
+        const currentContent = window.getCurrentContent ? window.getCurrentContent() : 
+            (window.quillEditor ? window.quillEditor.root.innerHTML : 
+            (document.getElementById("editor")?.value || ""));
+        
+        // 内容没有变化则不发送
+        if (currentContent === localContent) return;
+        
+        // 更新本地内容缓存
+        localContent = currentContent;
+        
+        // 通过 WebSocket 发送内容更新
+        ws.send(JSON.stringify({
+            type: "content_update",
+            payload: { html: currentContent }
+        }));
+        
+        console.log('WebSocket 内容更新已发送');
+    }, CONTENT_SEND_DEBOUNCE);
+}
+
 // 初始化 API 客户端
 function initApiClient() {
     if (!apiClient) {
@@ -97,30 +137,123 @@ function connect(doc_id, token) {
         
         if (msg.type === "init") {
             // 初始化内容 - 支持新旧两种格式
-            const content = msg.payload?.html || msg.content || "";
+            const serverContent = msg.payload?.html || msg.content || "";
+            const serverTimestamp = Date.now();
+            
+            // 设置标志：正在接收远程更新
+            isReceivingRemoteUpdate = true;
+            
+            // 检查是否存在本地草稿
+            const draftKey = `draft_${doc_id}`;
+            const draftDataStr = localStorage.getItem(draftKey);
+            
+            if (draftDataStr) {
+                try {
+                    const draftData = JSON.parse(draftDataStr);
+                    const draftContent = draftData.content || "";
+                    const draftTimestamp = draftData.timestamp || 0;
+                    
+                    // 如果本地草稿存在且与服务器内容不同，提示用户选择
+                    if (draftContent && draftContent !== serverContent) {
+                        const useDraft = confirm(
+                            `检测到本地存在未同步的草稿 (保存于 ${new Date(draftTimestamp).toLocaleString()})。\n\n` +
+                            `是否使用本地草稿？\n` +
+                            `- 点击"确定"使用本地草稿\n` +
+                            `- 点击"取消"使用服务器内容`
+                        );
+                        
+                        if (useDraft) {
+                            // 使用本地草稿 - 使用 Quill API 的 'silent' source
+                            if (window.quillEditor) {
+                                window.quillEditor.setContents(
+                                    window.quillEditor.clipboard.convert(draftContent), 
+                                    'silent'
+                                );
+                            } else {
+                                const editor = document.getElementById("editor");
+                                if (editor) editor.value = draftContent;
+                            }
+                            localContent = draftContent;
+                            console.log('已恢复本地草稿');
+                            
+                            // 重置标志
+                            setTimeout(() => {
+                                isReceivingRemoteUpdate = false;
+                                // 同步本地草稿到其他用户
+                                sendContentUpdate();
+                            }, 100);
+                            return;
+                        }
+                    }
+                } catch (e) {
+                    console.error('解析本地草稿失败:', e);
+                }
+            }
+            
+            // 使用服务器内容 - 使用 Quill API 的 'silent' source
             if (window.quillEditor) {
-                window.quillEditor.root.innerHTML = content;
+                window.quillEditor.setContents(
+                    window.quillEditor.clipboard.convert(serverContent), 
+                    'silent'
+                );
             } else {
                 const editor = document.getElementById("editor");
-                if (editor) editor.value = content;
+                if (editor) editor.value = serverContent;
             }
-            localContent = content;
+            localContent = serverContent;
+            
+            // 重置标志
+            setTimeout(() => {
+                isReceivingRemoteUpdate = false;
+            }, 100);
             
             // 保存服务器时间戳
-            localStorage.setItem(`server_time_${doc_id}`, Date.now().toString());
+            localStorage.setItem(`server_time_${doc_id}`, serverTimestamp.toString());
         }
         if (msg.type === "content" || msg.type === "content_update") {
-            // 只有当内容来自其他用户时才更新，避免循环更新
+            // 获取收到的内容
             const content = msg.payload?.html || msg.content || "";
-            if (msg.user_id !== undefined || msg.user !== undefined) {
-                if (window.quillEditor) {
-                    window.quillEditor.root.innerHTML = content;
-                } else {
-                    const editor = document.getElementById("editor");
-                    if (editor) editor.value = content;
-                }
-                localContent = content;
+            
+            // 关键修复：检查新内容是否与本地当前内容相同
+            // 如果相同，跳过更新以防止不必要的刷新和自触发循环
+            if (content === localContent) {
+                console.log('收到的内容与本地相同，跳过更新');
+                return;
             }
+            
+            // 设置标志：正在接收远程更新
+            isReceivingRemoteUpdate = true;
+            
+            // 内容不同，进行更新
+            if (window.quillEditor) {
+                // 保存当前光标位置
+                const selection = window.quillEditor.getSelection();
+                // 使用 Quill 的 API 设置内容，source='silent' 防止触发 text-change
+                window.quillEditor.setContents(window.quillEditor.clipboard.convert(content), 'silent');
+                // 恢复光标位置
+                if (selection) {
+                    setTimeout(() => {
+                        window.quillEditor.setSelection(selection.index, selection.length);
+                    }, 0);
+                }
+            } else {
+                const editor = document.getElementById("editor");
+                if (editor) {
+                    // 保存当前光标位置
+                    const selectionStart = editor.selectionStart;
+                    const selectionEnd = editor.selectionEnd;
+                    editor.value = content;
+                    // 恢复光标位置
+                    editor.setSelectionRange(selectionStart, selectionEnd);
+                }
+            }
+            localContent = content;
+            console.log('已更新远程内容');
+            
+            // 重置标志（延迟重置，确保事件处理完成）
+            setTimeout(() => {
+                isReceivingRemoteUpdate = false;
+            }, 100);
         }
         if (msg.type === "cursor") {
             const position = msg.payload?.index || msg.cursor?.position || 0;
@@ -165,7 +298,7 @@ function connect(doc_id, token) {
 }
 
 function setupEditor() {
-    // 自动保存功能
+    // 自动保存功能 - 仅负责本地草稿保存，不再调用 REST API
     window.autoSave = function() {
         if (!documentId) return;
         
@@ -176,42 +309,41 @@ function setupEditor() {
         // 内容没有变化则不保存
         if (currentContent === localContent) return;
         
-        // 防抖：避免频繁保存
+        // 防抖：避免频繁保存本地草稿
         clearTimeout(autoSaveTimer);
-        autoSaveTimer = setTimeout(async () => {
-            try {
-                await apiClient.updateDocument(documentId, currentContent);
-                localContent = currentContent;
-                lastSaveTime = Date.now();
-                
-                // 显示保存指示器
-                if (window.showSaveIndicator) {
-                    window.showSaveIndicator();
-                }
-                
-                // 保存本地草稿
-                saveLocalDraft(documentId, currentContent);
-                
-            } catch (error) {
-                console.error('自动保存失败:', error);
-                // 保存到本地草稿，稍后重试
-                saveLocalDraft(documentId, currentContent);
+        autoSaveTimer = setTimeout(() => {
+            // 仅保存本地草稿，不再调用 REST API
+            saveLocalDraft(documentId, currentContent);
+            lastSaveTime = Date.now();
+            
+            // 显示保存指示器
+            if (window.showSaveIndicator) {
+                window.showSaveIndicator();
             }
-        }, 3000); // 3秒后保存
+            
+            console.log('本地草稿已保存');
+        }, 3000); // 3秒后保存本地草稿
     };
     
     // 监听编辑器内容变化
     if (window.quillEditor) {
-        // Quill 编辑器已经在 HTML 中设置了监听器
+        // Quill 编辑器 - 监听 text-change 事件
+        window.quillEditor.on('text-change', function(delta, oldDelta, source) {
+            // 只处理用户输入，忽略程序化更改
+            if (source === 'user') {
+                sendContentUpdate();
+                // 同时触发本地草稿保存
+                window.autoSave();
+            }
+        });
     } else {
         const editor = document.getElementById("editor");
         if (editor) {
-            let timeout;
             editor.addEventListener("input", () => {
-                clearTimeout(timeout);
-                timeout = setTimeout(() => {
-                    window.autoSave();
-                }, 1000); // 1秒后触发自动保存
+                // 通过 WebSocket 发送内容更新
+                sendContentUpdate();
+                // 同时触发本地草稿保存
+                window.autoSave();
             });
         }
     }

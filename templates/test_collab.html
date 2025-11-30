@@ -214,6 +214,7 @@
         let socket = null;
         let isRemoteUpdating = false;
         let onlineUsers = new Set();
+        let lastSentContent = ''; // 跟踪最后发送的内容，防止重复发送
         
         // WebSocket 重连配置
         let reconnectAttempts = 0;
@@ -223,7 +224,19 @@
         const params = new URLSearchParams(window.location.search);
         const docId = parseInt(params.get('doc_id') || '1');
         const token = params.get('token') || localStorage.getItem('access_token') || '';
-        const username = params.get('username') || '';
+        
+        // 从 token 解析用户名（JWT 的 payload 部分）
+        let username = params.get('username') || '';
+        if (!username && token) {
+            try {
+                const payload = JSON.parse(atob(token.split('.')[1]));
+                username = payload.sub || '';
+                console.log('从 token 解析用户名:', username);
+            } catch (e) {
+                console.warn('无法从 token 解析用户名:', e);
+            }
+        }
+        
         const authHeader = token ? { 'Authorization': `Bearer ${token}` } : {};
 
         document.getElementById('back-to-documents').addEventListener('click', () => { window.location.href = '/'; });
@@ -284,10 +297,21 @@
 
         function setCurrentContent(content) {
             if (currentMode === 'rich-text' && quillEditor) {
-                quillEditor.root.innerHTML = content;
+                // 使用 Quill 的 setContents API 配合 'silent' source
+                // 这样不会触发 text-change 事件
+                try {
+                    const delta = quillEditor.clipboard.convert(content);
+                    quillEditor.setContents(delta, 'silent');
+                } catch (e) {
+                    // 回退方案：如果 convert 失败，直接设置 innerHTML
+                    console.warn('Quill convert 失败，使用 innerHTML:', e);
+                    quillEditor.root.innerHTML = content;
+                }
             } else {
                 document.getElementById('markdown-textarea').value = content;
             }
+            // 同步更新 lastSentContent，防止回发
+            lastSentContent = content;
         }
 
         function initQuillEditor() {
@@ -310,8 +334,15 @@
             });
 
             quillEditor.on('text-change', function(delta, oldDelta, source) {
+                // 只处理用户输入，忽略程序化更改和远程更新
                 if (source === 'user' && socket && socket.readyState === WebSocket.OPEN && !isRemoteUpdating) {
-                    sendContentUpdate(getCurrentContent());
+                    const currentContent = getCurrentContent();
+                    // 内容未变化则不发送
+                    if (currentContent === lastSentContent) {
+                        return;
+                    }
+                    lastSentContent = currentContent;
+                    sendContentUpdate(currentContent);
                     if (window.autoSave) window.autoSave();
                 }
             });
@@ -489,10 +520,24 @@
                 }
 
                 if (msg.type === 'content_update' && msg.payload?.html) {
-                    if (msg.user === username) return;
+                    // 检查是否是自己发送的消息（通过用户名或内容比较）
+                    if (msg.user === username) {
+                        console.log('跳过自己发送的消息');
+                        return;
+                    }
+                    
+                    const newContent = msg.payload.html;
+                    const currentContent = getCurrentContent();
+                    
+                    // 如果内容相同，跳过更新
+                    if (newContent === currentContent || newContent === lastSentContent) {
+                        console.log('内容相同，跳过更新');
+                        return;
+                    }
+                    
                     isRemoteUpdating = true;
-                    setCurrentContent(msg.payload.html);
-                    saveLocalDraft(docId, msg.payload.html);
+                    setCurrentContent(newContent);
+                    saveLocalDraft(docId, newContent);
                     isRemoteUpdating = false;
                     return;
                 }

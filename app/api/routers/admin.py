@@ -320,7 +320,7 @@ def upsert_setting(
     value_json = json.dumps(payload.value)
     
     # Check if setting exists
-    existing = db.execute("SELECT \"key\" FROM system_settings WHERE \"key\" = %s", (key,)).fetchone()
+    existing = db.query("SELECT \"key\" FROM system_settings WHERE \"key\" = %s LIMIT 1", (key,))
     
     if existing:
         # Update existing setting
@@ -336,3 +336,229 @@ def upsert_setting(
         )
     
     return {"key": key, "value": payload.value}
+
+
+# ==================== 系统监控接口 ====================
+
+from app.services.monitoring_service import (
+    get_system_info,
+    get_application_stats,
+    get_database_stats,
+    health_check,
+    get_recent_metrics,
+    get_metric_aggregation,
+    cleanup_old_metrics,
+)
+
+
+@router.get("/monitoring/health", summary="健康检查", description="检查系统各组件健康状态")
+def system_health_check(db=Depends(get_db)):
+    """系统健康检查（无需管理员权限）"""
+    return health_check(db)
+
+
+@router.get("/monitoring/system", summary="系统信息", description="获取服务器系统信息")
+def get_system_monitoring(
+    db=Depends(get_db),
+    current_admin=Depends(require_admin),
+):
+    """获取系统信息（CPU、内存、磁盘等）"""
+    return get_system_info()
+
+
+@router.get("/monitoring/application", summary="应用统计", description="获取应用运行统计")
+def get_application_monitoring(
+    db=Depends(get_db),
+    current_admin=Depends(require_admin),
+):
+    """获取应用统计信息"""
+    return get_application_stats(db)
+
+
+@router.get("/monitoring/database", summary="数据库统计", description="获取数据库统计信息")
+def get_database_monitoring(
+    db=Depends(get_db),
+    current_admin=Depends(require_admin),
+):
+    """获取数据库统计信息"""
+    return get_database_stats(db)
+
+
+@router.get("/monitoring/dashboard", summary="监控仪表板", description="获取综合监控数据")
+def get_monitoring_dashboard(
+    db=Depends(get_db),
+    current_admin=Depends(require_admin),
+):
+    """获取综合监控数据"""
+    return {
+        "system": get_system_info(),
+        "application": get_application_stats(db),
+        "database": get_database_stats(db),
+        "health": health_check(db),
+    }
+
+
+@router.get("/monitoring/metrics/{metric_name}", summary="获取指标数据", description="获取指定指标的历史数据")
+def get_metrics_data(
+    metric_name: str,
+    minutes: int = Query(60, ge=1, le=1440),
+    limit: int = Query(100, ge=1, le=1000),
+    db=Depends(get_db),
+    current_admin=Depends(require_admin),
+):
+    """获取指标历史数据"""
+    metrics = get_recent_metrics(db, metric_name, minutes, limit)
+    return {"metric_name": metric_name, "data": metrics}
+
+
+@router.get("/monitoring/metrics/{metric_name}/aggregation", summary="获取指标聚合", description="获取指标聚合统计")
+def get_metrics_aggregation(
+    metric_name: str,
+    bucket: str = Query("hour", regex="^(minute|hour|day)$"),
+    hours: int = Query(24, ge=1, le=168),
+    db=Depends(get_db),
+    current_admin=Depends(require_admin),
+):
+    """获取指标聚合统计"""
+    aggregation = get_metric_aggregation(db, metric_name, bucket, hours)
+    return {"metric_name": metric_name, "bucket": bucket, "data": aggregation}
+
+
+@router.post("/monitoring/cleanup", summary="清理过期数据", description="清理过期的监控指标数据")
+def cleanup_monitoring_data(
+    days: int = Query(30, ge=7, le=365),
+    db=Depends(get_db),
+    current_admin=Depends(require_admin),
+):
+    """清理过期的监控数据"""
+    deleted_count = cleanup_old_metrics(db, days)
+    return {"message": f"已清理 {deleted_count} 条过期数据", "deleted_count": deleted_count}
+
+
+# ==================== 数据备份接口 ====================
+
+from fastapi.responses import Response
+from app.services.backup_service import (
+    create_backup,
+    list_backups,
+    get_backup_info,
+    restore_backup,
+    delete_backup,
+    export_table,
+    cleanup_old_backups,
+)
+
+
+class BackupRequest(BaseModel):
+    tables: Optional[List[str]] = None
+    compress: bool = True
+
+
+class RestoreRequest(BaseModel):
+    backup_name: str
+    tables: Optional[List[str]] = None
+    truncate: bool = False
+
+
+@router.get("/backup/list", summary="列出备份", description="获取所有备份文件列表")
+def list_all_backups(
+    current_admin=Depends(require_admin),
+):
+    """列出所有备份文件"""
+    backups = list_backups()
+    return {"backups": backups, "count": len(backups)}
+
+
+@router.post("/backup/create", summary="创建备份", description="创建数据库备份")
+def create_database_backup(
+    data: BackupRequest,
+    db=Depends(get_db),
+    current_admin=Depends(require_admin),
+):
+    """创建数据库备份"""
+    try:
+        result = create_backup(db, tables=data.tables, compress=data.compress)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"创建备份失败: {e}")
+
+
+@router.get("/backup/{backup_name}", summary="获取备份详情", description="获取备份文件详细信息")
+def get_backup_details(
+    backup_name: str,
+    current_admin=Depends(require_admin),
+):
+    """获取备份文件详细信息"""
+    info = get_backup_info(backup_name)
+    if not info:
+        raise HTTPException(status_code=404, detail="备份不存在")
+    return info
+
+
+@router.post("/backup/restore", summary="恢复备份", description="从备份恢复数据")
+def restore_database_backup(
+    data: RestoreRequest,
+    db=Depends(get_db),
+    current_admin=Depends(require_admin),
+):
+    """从备份恢复数据"""
+    try:
+        result = restore_backup(
+            db,
+            backup_name=data.backup_name,
+            tables=data.tables,
+            truncate=data.truncate,
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"恢复备份失败: {e}")
+
+
+@router.delete("/backup/{backup_name}", summary="删除备份", description="删除指定备份文件")
+def delete_database_backup(
+    backup_name: str,
+    current_admin=Depends(require_admin),
+):
+    """删除备份文件"""
+    success = delete_backup(backup_name)
+    if success:
+        return {"message": f"备份 {backup_name} 已删除"}
+    else:
+        raise HTTPException(status_code=404, detail="备份不存在或删除失败")
+
+
+@router.get("/backup/export/{table}", summary="导出表", description="导出单个表为JSON或CSV")
+def export_single_table(
+    table: str,
+    format: str = Query("json", regex="^(json|csv)$"),
+    db=Depends(get_db),
+    current_admin=Depends(require_admin),
+):
+    """导出单个表"""
+    try:
+        data = export_table(db, table, format)
+        
+        media_type = "application/json" if format == "json" else "text/csv"
+        filename = f"{table}.{format}"
+        
+        return Response(
+            content=data,
+            media_type=media_type,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"导出失败: {e}")
+
+
+@router.post("/backup/cleanup", summary="清理旧备份", description="只保留最近N个备份")
+def cleanup_backups(
+    keep_count: int = Query(10, ge=1, le=100),
+    current_admin=Depends(require_admin),
+):
+    """清理旧备份"""
+    deleted = cleanup_old_backups(keep_count)
+    return {"message": f"已清理 {deleted} 个旧备份", "deleted_count": deleted}

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from app.core.config import settings
 from app.db.init_db import init_db
-from app.api.routers import auth, users, documents, ws, notifications, notify_ws, admin, feedback
+from app.api.routers import auth, users, documents, ws, notifications, notify_ws, admin, feedback, chat
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -87,6 +87,7 @@ app.include_router(notifications.router, tags=["通知"])
 app.include_router(notify_ws.router, tags=["通知实时通信"])
 app.include_router(admin.router, tags=["系统管理"])
 app.include_router(feedback.router, tags=["反馈"])
+app.include_router(chat.router, tags=["文档聊天"])
 
 # Mount static files and templates
 templates = Jinja2Templates(directory="templates")

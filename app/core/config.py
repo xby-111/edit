@@ -26,5 +26,26 @@ class Settings(BaseSettings):
     
     # CORS settings
     BACKEND_CORS_ORIGINS: list[str] = ["http://localhost", "http://127.0.0.1", "http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:8000", "http://127.0.0.1:8000"]  # Configure appropriately for production
+    
+    # OAuth2 Settings - GitHub
+    GITHUB_CLIENT_ID: str = os.getenv("GITHUB_CLIENT_ID", "")
+    GITHUB_CLIENT_SECRET: str = os.getenv("GITHUB_CLIENT_SECRET", "")
+    
+    # OAuth2 Settings - Google
+    GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_CLIENT_ID", "")
+    GOOGLE_CLIENT_SECRET: str = os.getenv("GOOGLE_CLIENT_SECRET", "")
+    
+    # Email Settings (SMTP)
+    SMTP_HOST: str = os.getenv("SMTP_HOST", "")
+    SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
+    SMTP_USER: str = os.getenv("SMTP_USER", "")
+    SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
+    SMTP_FROM_EMAIL: str = os.getenv("SMTP_FROM_EMAIL", "noreply@example.com")
+    
+    # SMS Settings (阿里云短信)
+    SMS_ACCESS_KEY_ID: str = os.getenv("SMS_ACCESS_KEY_ID", "")
+    SMS_ACCESS_KEY_SECRET: str = os.getenv("SMS_ACCESS_KEY_SECRET", "")
+    SMS_SIGN_NAME: str = os.getenv("SMS_SIGN_NAME", "")
+    SMS_TEMPLATE_CODE: str = os.getenv("SMS_TEMPLATE_CODE", "")
 
 settings = Settings()

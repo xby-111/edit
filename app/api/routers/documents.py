@@ -516,6 +516,139 @@ async def import_document_endpoint(
         raise HTTPException(status_code=500, detail="导入文档失败")
 
 
+# ==================== 评论与任务基础接口 ====================
+
+@router.get("/documents/{document_id}/comments", response_model=List[Comment], summary="获取文档评论")
+async def get_document_comments(
+    document_id: int,
+    current_user=Depends(get_current_user),
+    db=Depends(get_db)
+):
+    """获取文档的评论列表"""
+    # 权限检查：只需 can_view 权限
+    permission = check_document_permission(db, document_id, current_user.id)
+    if not permission["can_view"]:
+        raise HTTPException(status_code=403, detail="文档不存在或无权访问")
+    
+    try:
+        return list_comments(db, document_id)
+    except Exception as e:
+        logger.error("获取评论失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="获取评论失败")
+
+
+@router.post("/documents/{document_id}/comments", response_model=Comment, summary="创建评论")
+async def create_document_comment(
+    document_id: int,
+    comment_in: CommentCreate,
+    current_user=Depends(get_current_user),
+    db=Depends(get_db),
+    request: Request = None,
+):
+    """创建文档评论"""
+    # 权限检查：只需 can_view 权限（通常允许协作者和查看者评论）
+    permission = check_document_permission(db, document_id, current_user.id)
+    if not permission["can_view"]:
+        raise HTTPException(status_code=403, detail="文档不存在或无权访问")
+        
+    try:
+        comment = create_comment(
+            db,
+            document_id,
+            current_user.id,
+            comment_in.content,
+            comment_in.line_no,
+            None,
+            None,
+            None,
+        )
+        # 记录操作日志
+        try:
+            log_action(
+                db,
+                user_id=current_user.id,
+                action="comment.create",
+                resource_type="document",
+                resource_id=document_id,
+                request=request,
+                meta={"comment_id": getattr(comment, 'id', None) if hasattr(comment, 'id') else comment.get("id") if isinstance(comment, dict) else None},
+            )
+        except Exception:
+            pass
+        return comment
+    except Exception as e:
+        logger.error("创建评论失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="创建评论失败")
+
+
+@router.get("/documents/{document_id}/tasks", response_model=List[Task], summary="获取文档任务")
+async def get_document_tasks(
+    document_id: int,
+    current_user=Depends(get_current_user),
+    db=Depends(get_db)
+):
+    """获取文档的任务列表"""
+    # 权限检查：只需 can_view 权限
+    permission = check_document_permission(db, document_id, current_user.id)
+    if not permission["can_view"]:
+        raise HTTPException(status_code=403, detail="文档不存在或无权访问")
+        
+    try:
+        return list_tasks(db, document_id)
+    except Exception as e:
+        logger.error("获取任务失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="获取任务失败")
+
+
+@router.post("/documents/{document_id}/tasks", response_model=Task, summary="创建任务")
+async def create_document_task(
+    document_id: int,
+    task_in: TaskCreate,
+    current_user=Depends(get_current_user),
+    db=Depends(get_db),
+    request: Request = None,
+):
+    """创建文档任务"""
+    # 权限检查：必须有 can_edit 权限才能创建任务
+    permission = check_document_permission(db, document_id, current_user.id)
+    if not permission["can_edit"]:
+        raise HTTPException(status_code=403, detail="无编辑权限，无法创建任务")
+
+    try:
+        # 处理任务输入数据
+        assignee_id = getattr(task_in, 'assignee_id', None) or getattr(task_in, 'assigned_to', None)
+        due = getattr(task_in, "due_at", None) or getattr(task_in, "due_date", None) or getattr(task_in, "deadline", None)
+        
+        task = create_task(
+            db,
+            document_id,
+            current_user.id,
+            task_in.title,
+            task_in.description,
+            assignee_id,
+            due,
+        )
+        
+        # 记录操作日志
+        try:
+            log_action(
+                db,
+                user_id=current_user.id,
+                action="task.create",
+                resource_type="document",
+                resource_id=document_id,
+                request=request,
+                meta={"task_id": task.get("id") if isinstance(task, dict) else getattr(task, "id", None)},
+            )
+        except Exception:
+            pass
+            
+        return task
+    except Exception as e:
+        logger.error("创建任务失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="创建任务失败")
+
+
 # ==================== 文档 CRUD 相关路由 ====================
 
 @router.post("/documents", response_model=Document, status_code=status.HTTP_201_CREATED, summary="创建文档", description="创建新的协作文档")
@@ -559,4 +692,13 @@ async def create_document_endpoint(
         raise HTTPException(status_code=500, detail="创建文档失败")
 
 
-@router.get("/documents/shared", response_model=
+@router.get("/documents/shared", response_model=List[Document], summary="获取共享文档列表", description="获取当前用户作为协作者的文档列表")
+async def get_shared_documents_endpoint(
+    current_user = Depends(get_current_user),
+    db = Depends(get_db),
+    skip: int = 0,
+    limit: int = 100
+):
+    """获取当前用户作为协作者的文档列表"""
+    documents = get_shared_documents(db, current_user.id, skip=skip, limit=limit)
+    return documents
