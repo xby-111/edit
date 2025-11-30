@@ -255,7 +255,7 @@ function connect(doc_id, token) {
     const tokenPart = token ? `?token=${token}` : '';
     ws = new WebSocket(`${protocol}//${location.host}/api/v1/ws/documents/${doc_id}${tokenPart}`);
 
-    ws.onmessage = (event) => {
+    ws.onmessage = async (event) => {
         const msg = JSON.parse(event.data);
         
         // 处理心跳消息
@@ -313,12 +313,15 @@ function connect(doc_id, token) {
                     
                     // 如果本地草稿存在且与服务器内容不同，提示用户选择
                     if (draftContent && draftContent !== serverContent) {
-                        const useDraft = confirm(
-                            `检测到本地存在未同步的草稿 (保存于 ${new Date(draftTimestamp).toLocaleString()})。\n\n` +
+                        const confirmMessage = `检测到本地存在未同步的草稿 (保存于 ${new Date(draftTimestamp).toLocaleString()})。\n\n` +
                             `是否使用本地草稿？\n` +
                             `- 点击"确定"使用本地草稿\n` +
-                            `- 点击"取消"使用服务器内容`
-                        );
+                            `- 点击"取消"使用服务器内容`;
+                        
+                        let useDraft = false;
+                        if (typeof Toast !== 'undefined' && Toast.confirm) {
+                            useDraft = await Toast.confirm(confirmMessage, { confirmText: '使用草稿', cancelText: '使用服务器内容' });
+                        }
                         
                         if (useDraft) {
                             // 使用本地草稿 - 使用 Quill API 的 'silent' source
@@ -451,7 +454,9 @@ function connect(doc_id, token) {
             }, interval);
         } else {
             console.log("已达到最大重连次数");
-            alert('连接已断开，请刷新页面重新连接');
+            if (typeof Toast !== 'undefined') {
+                Toast.error('连接已断开，请刷新页面重新连接', { duration: 0 }); // 0 表示不自动关闭
+            }
         }
     };
 }

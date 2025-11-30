@@ -2,200 +2,44 @@
 <html lang="zh-CN">
 <head>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>多人协作文档编辑系统</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
     <style>
+        :root {
+            --primary-color: #0d6efd;
+            --success-color: #198754;
+            --danger-color: #dc3545;
+        }
+        
         body {
-            font-family: Arial, sans-serif;
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #f5f5f5;
-        }
-        
-        .container {
-            background-color: white;
-            padding: 30px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
-        
-        h1 {
-            color: #333;
-            text-align: center;
-            margin-bottom: 30px;
-        }
-        
-        .auth-section {
-            max-width: 400px;
-            margin: 0 auto;
-            padding: 20px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-        }
-        
-        .form-group {
-            margin-bottom: 15px;
-        }
-        
-        label {
-            display: block;
-            margin-bottom: 5px;
-            font-weight: bold;
-        }
-        
-        input[type="text"], input[type="password"] {
-            width: 100%;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            box-sizing: border-box;
-        }
-        
-        button {
-            background-color: #4CAF50;
-            color: white;
-            padding: 10px 20px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 16px;
-            width: 100%;
-        }
-        
-        button:hover {
-            background-color: #45a049;
-        }
-        
-        .error-message {
-            color: #f44336;
-            margin-top: 10px;
-            text-align: center;
-        }
-        
-        .success-message {
-            color: #4CAF50;
-            margin-top: 10px;
-            text-align: center;
-        }
-        
-        .documents-section {
-            display: none;
-        }
-        
-        .document-list {
-            margin-top: 20px;
-        }
-        
-        .document-item {
-            padding: 15px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            margin-bottom: 10px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        
-        .document-info h3 {
-            margin: 0 0 5px 0;
-            color: #333;
-        }
-        
-        .document-info p {
-            margin: 0;
-            color: #666;
-            font-size: 14px;
-        }
-        
-        .document-actions {
-            display: flex;
-            gap: 10px;
-        }
-        
-        .btn-small {
-            padding: 5px 10px;
-            font-size: 14px;
-            width: auto;
-        }
-        
-        .btn-primary {
-            background-color: #2196F3;
-        }
-        
-        .btn-primary:hover {
-            background-color: #0b7dda;
-        }
-        
-        .btn-danger {
-            background-color: #f44336;
-        }
-        
-        .btn-danger:hover {
-            background-color: #d32f2f;
-        }
-        
-        .btn-success {
-            background-color: #4CAF50;
-        }
-        
-        .btn-success:hover {
-            background-color: #45a049;
-        }
-        
-        .btn-info {
-            background-color: #17a2b8;
-        }
-        
-        .btn-info:hover {
-            background-color: #138496;
-        }
-        
-        .user-info {
-            text-align: right;
-            margin-bottom: 20px;
-            color: #666;
-        }
-        
-        .logout-btn {
-            background-color: #f44336;
-            margin-left: 10px;
-        }
-        
-        .no-documents {
-            text-align: center;
-            color: #666;
-            margin-top: 20px;
-        }
-        
-        .search-section {
             background-color: #f8f9fa;
-            padding: 20px;
-            border-radius: 8px;
-            margin-bottom: 20px;
+            min-height: 100vh;
         }
         
-        .search-form {
-            display: grid;
-            grid-template-columns: 2fr 1fr 1fr 1fr auto;
-            gap: 10px;
-            align-items: end;
+        .main-container {
+            max-width: 1200px;
         }
         
-        .search-form input, .search-form select {
-            padding: 8px 12px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 14px;
+        .auth-card {
+            max-width: 420px;
+            margin: 0 auto;
+        }
+        
+        .document-card {
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .document-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15) !important;
         }
         
         .tag {
-            display: inline-block;
-            background-color: #e3f2fd;
-            color: #1976d2;
-            padding: 2px 8px;
-            border-radius: 12px;
-            font-size: 12px;
-            margin: 2px;
+            font-size: 0.75rem;
         }
         
         .clickable-tag {
@@ -204,235 +48,266 @@
         }
         
         .clickable-tag:hover {
-            background-color: #bbdefb;
+            background-color: #0d6efd !important;
+            color: white !important;
         }
         
-        .btn-warning {
-            background-color: #ff9800;
-        }
-        
-        .btn-warning:hover {
-            background-color: #e68900;
-        }
-        
-        .folder-section {
-            margin-bottom: 20px;
-        }
-        
-        .folder-tabs {
-            display: flex;
-            gap: 5px;
-            margin-bottom: 15px;
-            border-bottom: 1px solid #ddd;
-        }
-        
-        .folder-tab {
-            padding: 8px 16px;
+        .folder-tabs .nav-link {
+            color: #6c757d;
             border: none;
-            background: none;
-            cursor: pointer;
             border-bottom: 2px solid transparent;
-            transition: all 0.2s;
+            border-radius: 0;
+            padding: 0.5rem 1rem;
         }
         
-        .folder-tab.active {
-            border-bottom-color: #2196F3;
-            color: #2196F3;
-            font-weight: bold;
+        .folder-tabs .nav-link.active,
+        .folder-tabs .nav-link:hover {
+            color: var(--primary-color);
+            border-bottom-color: var(--primary-color);
+            background: none;
         }
         
-        .folder-tab:hover {
-            color: #2196F3;
+        .search-section {
+            background-color: #fff;
+            border-radius: 0.5rem;
+            border: 1px solid #dee2e6;
         }
         
-        .tags-container {
-            margin-top: 15px;
-        }
-        
-        .advanced-search {
-            margin-top: 15px;
-            padding: 15px;
-            background-color: white;
-            border: 1px solid #ddd;
-            border-radius: 5px;
+        .documents-section {
             display: none;
         }
         
-        .advanced-search-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 15px;
-            margin-top: 10px;
+        .shared-badge {
+            background-color: #198754;
         }
         
-        .form-group {
-            margin-bottom: 10px;
+        .locked-badge {
+            background-color: #dc3545;
         }
-        
-        .form-group label {
-            display: block;
-            margin-bottom: 5px;
-            font-weight: bold;
-            font-size: 14px;
-        }
-        
-        .form-group input, .form-group select {
-            width: 100%;
-            padding: 8px 12px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 14px;
-            box-sizing: border-box;
+
+        .document-meta {
+            font-size: 0.875rem;
+            color: #6c757d;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>多人协作文档编辑系统</h1>
+    <div class="container-fluid main-container py-4 mx-auto">
+        <!-- Header -->
+        <div class="text-center mb-4">
+            <h1 class="display-5 fw-bold text-primary">
+                <i class="bi bi-file-earmark-text me-2"></i>多人协作文档编辑系统
+            </h1>
+            <p class="text-muted">实时协作，高效编辑</p>
+        </div>
         
         <!-- 登录表单 -->
-        <div id="login-section" class="auth-section">
-            <h2>用户登录</h2>
-            <form id="login-form">
-                <div class="form-group">
-                    <label for="username">用户名:</label>
-                    <input type="text" id="username" name="username" required>
+        <div id="login-section" class="auth-card">
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white text-center py-3">
+                    <h4 class="mb-0"><i class="bi bi-box-arrow-in-right me-2"></i>用户登录</h4>
                 </div>
-                <div class="form-group">
-                    <label for="password">密码:</label>
-                    <input type="password" id="password" name="password" required>
+                <div class="card-body p-4">
+                    <form id="login-form">
+                        <div class="mb-3">
+                            <label for="username" class="form-label">
+                                <i class="bi bi-person me-1"></i>用户名
+                            </label>
+                            <input type="text" class="form-control" id="username" name="username" required placeholder="请输入用户名">
+                        </div>
+                        <div class="mb-3">
+                            <label for="password" class="form-label">
+                                <i class="bi bi-lock me-1"></i>密码
+                            </label>
+                            <input type="password" class="form-control" id="password" name="password" required placeholder="请输入密码">
+                        </div>
+                        <button type="submit" class="btn btn-primary w-100 mb-3">
+                            <i class="bi bi-box-arrow-in-right me-1"></i>登录
+                        </button>
+                        <div id="login-error" class="alert alert-danger d-none" role="alert"></div>
+                    </form>
                 </div>
-                <button type="submit">登录</button>
-                <div id="login-error" class="error-message"></div>
-            </form>
-            
-            <div style="margin-top: 20px; text-align: center;">
-                <p>还没有账号？</p>
-                <button type="button" id="show-register" style="background-color: #FF9800;">注册新账号</button>
+                <div class="card-footer text-center bg-light py-3">
+                    <p class="mb-2 text-muted">还没有账号？</p>
+                    <button type="button" id="show-register" class="btn btn-outline-warning">
+                        <i class="bi bi-person-plus me-1"></i>注册新账号
+                    </button>
+                </div>
             </div>
         </div>
         
         <!-- 注册表单 -->
-        <div id="register-section" class="auth-section" style="display: none;">
-            <h2>用户注册</h2>
-            <form id="register-form">
-                <div class="form-group">
-                    <label for="reg-username">用户名:</label>
-                    <input type="text" id="reg-username" name="username" required>
+        <div id="register-section" class="auth-card" style="display: none;">
+            <div class="card shadow-sm">
+                <div class="card-header bg-warning text-dark text-center py-3">
+                    <h4 class="mb-0"><i class="bi bi-person-plus me-2"></i>用户注册</h4>
                 </div>
-                <div class="form-group">
-                    <label for="reg-email">邮箱:</label>
-                    <input type="text" id="reg-email" name="email" required>
+                <div class="card-body p-4">
+                    <form id="register-form">
+                        <div class="mb-3">
+                            <label for="reg-username" class="form-label">
+                                <i class="bi bi-person me-1"></i>用户名
+                            </label>
+                            <input type="text" class="form-control" id="reg-username" name="username" required placeholder="请输入用户名">
+                        </div>
+                        <div class="mb-3">
+                            <label for="reg-email" class="form-label">
+                                <i class="bi bi-envelope me-1"></i>邮箱
+                            </label>
+                            <input type="email" class="form-control" id="reg-email" name="email" required placeholder="请输入邮箱">
+                        </div>
+                        <div class="mb-3">
+                            <label for="reg-password" class="form-label">
+                                <i class="bi bi-lock me-1"></i>密码
+                            </label>
+                            <input type="password" class="form-control" id="reg-password" name="password" required placeholder="请输入密码">
+                        </div>
+                        <button type="submit" class="btn btn-warning w-100 mb-3">
+                            <i class="bi bi-person-plus me-1"></i>注册
+                        </button>
+                        <div id="register-error" class="alert alert-danger d-none" role="alert"></div>
+                    </form>
                 </div>
-                <div class="form-group">
-                    <label for="reg-password">密码:</label>
-                    <input type="password" id="reg-password" name="password" required>
+                <div class="card-footer text-center bg-light py-3">
+                    <p class="mb-2 text-muted">已有账号？</p>
+                    <button type="button" id="show-login" class="btn btn-outline-primary">
+                        <i class="bi bi-box-arrow-in-right me-1"></i>返回登录
+                    </button>
                 </div>
-                <button type="submit">注册</button>
-                <div id="register-error" class="error-message"></div>
-            </form>
-            
-            <div style="margin-top: 20px; text-align: center;">
-                <p>已有账号？</p>
-                <button type="button" id="show-login" style="background-color: #2196F3;">返回登录</button>
             </div>
         </div>
         
         <!-- 文档列表 -->
         <div id="documents-section" class="documents-section">
-            <div class="user-info">
-                欢迎，<span id="current-username"></span>
-                <button id="logout-btn" class="logout-btn btn-small">退出登录</button>
+            <!-- 顶部导航栏 -->
+            <div class="d-flex justify-content-between align-items-center mb-4 p-3 bg-white rounded shadow-sm">
+                <div>
+                    <span class="text-muted">欢迎，</span>
+                    <span id="current-username" class="fw-bold text-primary"></span>
+                </div>
+                <button id="logout-btn" class="btn btn-outline-danger btn-sm">
+                    <i class="bi bi-box-arrow-right me-1"></i>退出登录
+                </button>
             </div>
             
-            <h2>我的文档</h2>
-            
-            <!-- 共享给我的文档 -->
-            <div id="shared-documents-section" style="margin-top: 40px;">
-                <h2>共享给我的文档</h2>
-                <div id="shared-document-list" class="document-list">
-                    <!-- 共享文档列表将通过 JavaScript 动态加载 -->
-                </div>
-                <div id="no-shared-documents" class="no-documents" style="display: none;">
-                    暂无共享文档
-                </div>
+            <!-- 操作按钮 -->
+            <div class="mb-4">
+                <button id="create-document-btn" class="btn btn-success me-2">
+                    <i class="bi bi-file-earmark-plus me-1"></i>从模板新建文档
+                </button>
+                <button id="import-document-btn" class="btn btn-primary">
+                    <i class="bi bi-upload me-1"></i>导入文档
+                </button>
             </div>
             
             <!-- 搜索区域 -->
-            <div class="search-section">
-                <h3 style="margin-top: 0;">搜索文档</h3>
-                <div class="search-form">
-                    <input type="text" id="search-keyword" placeholder="搜索关键词...">
-                    <select id="search-folder">
-                        <option value="">所有文件夹</option>
-                    </select>
-                    <select id="search-sort">
-                        <option value="updated_at">更新时间</option>
-                        <option value="created_at">创建时间</option>
-                        <option value="title">标题</option>
-                    </select>
-                    <select id="search-order">
-                        <option value="desc">降序</option>
-                        <option value="asc">升序</option>
-                    </select>
-                    <button onclick="searchDocuments()" class="btn-small btn-primary">搜索</button>
+            <div class="search-section p-3 mb-4">
+                <h5 class="mb-3"><i class="bi bi-search me-2"></i>搜索文档</h5>
+                <div class="row g-2">
+                    <div class="col-md-4">
+                        <input type="text" class="form-control" id="search-keyword" placeholder="搜索关键词...">
+                    </div>
+                    <div class="col-md-2">
+                        <select class="form-select" id="search-folder">
+                            <option value="">所有文件夹</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <select class="form-select" id="search-sort">
+                            <option value="updated_at">更新时间</option>
+                            <option value="created_at">创建时间</option>
+                            <option value="title">标题</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <select class="form-select" id="search-order">
+                            <option value="desc">降序</option>
+                            <option value="asc">升序</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <button onclick="searchDocuments()" class="btn btn-primary w-100">
+                            <i class="bi bi-search me-1"></i>搜索
+                        </button>
+                    </div>
+                </div>
+                <div class="row mt-2">
+                    <div class="col-md-6">
+                        <input type="text" class="form-control" id="search-tags" placeholder="标签（用逗号分隔）...">
+                    </div>
+                    <div class="col-md-2">
+                        <button onclick="toggleAdvancedSearch()" class="btn btn-outline-secondary w-100">
+                            <i class="bi bi-sliders me-1"></i>高级搜索
+                        </button>
+                    </div>
                 </div>
                 
-                <div style="margin-top: 10px;">
-                    <input type="text" id="search-tags" placeholder="标签（用逗号分隔）..." style="width: 300px; margin-right: 10px;">
-                    <button onclick="toggleAdvancedSearch()" class="btn-small">高级搜索</button>
-                </div>
-                
-                <div id="advanced-search" class="advanced-search">
-                    <h4>高级搜索选项</h4>
-                    <div class="advanced-search-grid">
-                        <div class="form-group">
-                            <label>创建时间从:</label>
-                            <input type="date" id="created-from">
+                <!-- 高级搜索 -->
+                <div id="advanced-search" class="mt-3 p-3 bg-light rounded" style="display: none;">
+                    <h6 class="mb-3"><i class="bi bi-funnel me-1"></i>高级搜索选项</h6>
+                    <div class="row g-3">
+                        <div class="col-md-3">
+                            <label class="form-label small">创建时间从:</label>
+                            <input type="date" class="form-control form-control-sm" id="created-from">
                         </div>
-                        <div class="form-group">
-                            <label>创建时间到:</label>
-                            <input type="date" id="created-to">
+                        <div class="col-md-3">
+                            <label class="form-label small">创建时间到:</label>
+                            <input type="date" class="form-control form-control-sm" id="created-to">
                         </div>
-                        <div class="form-group">
-                            <label>更新时间从:</label>
-                            <input type="date" id="updated-from">
+                        <div class="col-md-3">
+                            <label class="form-label small">更新时间从:</label>
+                            <input type="date" class="form-control form-control-sm" id="updated-from">
                         </div>
-                        <div class="form-group">
-                            <label>更新时间到:</label>
-                            <input type="date" id="updated-to">
+                        <div class="col-md-3">
+                            <label class="form-label small">更新时间到:</label>
+                            <input type="date" class="form-control form-control-sm" id="updated-to">
                         </div>
                     </div>
                 </div>
                 
-                <div id="tags-container" class="tags-container">
-                    <!-- 标签列表将通过 JavaScript 动态加载 -->
-                </div>
+                <!-- 标签区域 -->
+                <div id="tags-container" class="mt-3"></div>
             </div>
             
             <!-- 文件夹分类 -->
-            <div class="folder-section">
-                <h3>文件夹分类</h3>
-                <div id="folder-tabs" class="folder-tabs">
-                    <!-- 文件夹标签将通过 JavaScript 动态加载 -->
+            <div class="mb-4">
+                <h5><i class="bi bi-folder me-2"></i>文件夹分类</h5>
+                <ul id="folder-tabs" class="nav folder-tabs border-bottom">
+                    <!-- 动态加载 -->
+                </ul>
+            </div>
+            
+            <!-- 我的文档 -->
+            <div class="mb-5">
+                <h4 class="mb-3"><i class="bi bi-file-earmark-text me-2"></i>我的文档</h4>
+                <div id="document-list" class="row g-3">
+                    <!-- 文档列表将通过 JavaScript 动态加载 -->
+                </div>
+                <div id="no-documents" class="text-center text-muted py-5" style="display: none;">
+                    <i class="bi bi-inbox display-4 d-block mb-2"></i>
+                    <p>暂无文档，点击上方按钮创建新文档</p>
                 </div>
             </div>
             
-            <div style="margin-bottom: 15px;">
-    <button id="create-document-btn" class="btn-success">从模板新建文档</button>
-    <button id="import-document-btn" class="btn-primary" style="margin-left: 10px;">导入文档</button>
-</div>
-            
-            <div id="document-list" class="document-list">
-                <!-- 文档列表将通过 JavaScript 动态加载 -->
-            </div>
-            
-            <div id="no-documents" class="no-documents" style="display: none;">
-                暂无文档，点击上方按钮创建新文档
+            <!-- 共享给我的文档 -->
+            <div id="shared-documents-section">
+                <h4 class="mb-3"><i class="bi bi-share me-2"></i>共享给我的文档</h4>
+                <div id="shared-document-list" class="row g-3">
+                    <!-- 共享文档列表将通过 JavaScript 动态加载 -->
+                </div>
+                <div id="no-shared-documents" class="text-center text-muted py-5" style="display: none;">
+                    <i class="bi bi-inbox display-4 d-block mb-2"></i>
+                    <p>暂无共享文档</p>
+                </div>
             </div>
         </div>
     </div>
 
+    <!-- Bootstrap 5 JS Bundle -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- Toast 通知模块 -->
+    <script src="/static/toast.js"></script>
+    <!-- API 客户端 -->
     <script src="/static/client.js"></script>
 </body>
 </html>
