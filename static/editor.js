@@ -4,7 +4,6 @@ let documentId = 1;
 let localContent = ""; // 本地内容缓存，用于增量同步
 let autoSaveTimer = null;
 let lastSaveTime = 0;
-let apiClient = null;
 
 // WebSocket 重连配置
 let reconnectAttempts = 0;
@@ -27,6 +26,24 @@ let useCRDT = true; // 是否使用 CRDT 模式（可降级为全量同步）
 
 // 客户端 ID（用于 CRDT 操作标识）
 const clientId = 'client_' + Math.random().toString(36).substr(2, 9);
+const AUTH_FAILURE_CODE = 1008;
+
+function clearStoredAuth() {
+    if (window.api && typeof window.api.clearAuth === 'function') {
+        window.api.clearAuth();
+    } else {
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('username');
+        localStorage.removeItem('user_id');
+    }
+}
+
+function redirectToLogin() {
+    const redirectDelay = 1200;
+    setTimeout(() => {
+        window.location.href = '/';
+    }, redirectDelay);
+}
 
 /**
  * 将 Quill Delta 转换为 CRDT 操作序列
@@ -181,35 +198,6 @@ function sendContentUpdate(delta = null) {
     }, CONTENT_SEND_DEBOUNCE);
 }
 
-// 初始化 API 客户端
-function initApiClient() {
-    if (!apiClient) {
-        // 简单的 API 调用封装
-        apiClient = {
-            updateDocument: async function(documentId, content) {
-                const token = localStorage.getItem('access_token');
-                if (!token) {
-                    throw new Error('未登录');
-                }
-                
-                const response = await fetch(`/api/v1/documents/${documentId}`, {
-                    method: 'PUT',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${token}`
-                    },
-                    body: JSON.stringify({ content })
-                });
-                
-                if (!response.ok) {
-                    throw new Error('保存失败');
-                }
-                
-                return response.json();
-            }
-        };
-    }
-}
 
 // 更新连接状态显示
 function updateConnectionStatus(status) {
@@ -443,6 +431,16 @@ function connect(doc_id, token) {
         console.log("WS 断开", event.code, event.reason);
         updateConnectionStatus('disconnected');
         
+        if (event.code === AUTH_FAILURE_CODE) {
+            console.warn('WebSocket 鉴权失败，停止重连');
+            clearStoredAuth();
+            if (typeof Toast !== 'undefined') {
+                Toast.error('登录状态已过期，请重新登录');
+            }
+            redirectToLogin();
+            return;
+        }
+        
         // 尝试自动重连（指数退避）
         if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
             reconnectAttempts++;
@@ -614,9 +612,6 @@ window.initEditor = function(doc_id, token = "") {
     if (!token) {
         token = localStorage.getItem('access_token') || '';
     }
-    
-    // 初始化 API 客户端
-    initApiClient();
     
     // 连接 WebSocket
     connect(doc_id, token);

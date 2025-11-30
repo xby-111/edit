@@ -6,7 +6,11 @@ import time
 import re
 import functools
 from typing import Generator, Any, Optional, Sequence
+
 import py_opengauss
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -323,6 +327,45 @@ def parse_database_url(url):
     except Exception as e:
         logger.error(f"解析数据库连接字符串失败: {e}")
         raise
+
+
+def build_sqlalchemy_connection_url(url: str) -> str:
+    """将 openGauss URL 转换为 SQLAlchemy 可用的 postgresql+psycopg2 URL。"""
+    if not url:
+        raise ValueError("数据库连接字符串未配置")
+    if not url.startswith('opengauss://'):
+        return url
+    params = parse_database_url(url)
+    database = params['database']
+    query = ''
+    if '?' in database:
+        database, query = database.split('?', 1)
+    password_encoded = urllib.parse.quote_plus(params['password'])
+    sqlalchemy_url = (
+        f"postgresql+psycopg2://{params['user']}:{password_encoded}"
+        f"@{params['host']}:{params['port']}/{database}"
+    )
+    if query:
+        sqlalchemy_url = f"{sqlalchemy_url}?{query}"
+    return sqlalchemy_url
+
+
+SQLALCHEMY_DATABASE_URL = build_sqlalchemy_connection_url(DATABASE_URL)
+
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL,
+    echo=settings.DEBUG,
+    future=True,
+    pool_pre_ping=True,
+)
+
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    expire_on_commit=False,
+    bind=engine,
+    future=True,
+)
 
 
 def create_connection(max_retries=3):
