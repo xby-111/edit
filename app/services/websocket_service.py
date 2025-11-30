@@ -1,30 +1,38 @@
-# services/websocket_service.py
-from typing import Dict, Any, Optional, List
-from fastapi import WebSocket
-import json
+"""
+WebSocket 服务层
+
+处理文档协作的 WebSocket 连接管理、消息广播和 CRDT 同步。
+"""
+from typing import Dict, Any, Optional, List, Set
 from datetime import datetime
-from app.crdt import get_document_crdt, CRDT, Operation
+import logging
+import asyncio
 
+from fastapi import WebSocket
 
-def _escape(value: str | None) -> str:
-    """简单转义单引号，避免 SQL 语法错误（内部使用即可）"""
-    if value is None:
-        return "NULL"
-    escaped_value = value.replace("'", "''")
-    return f"'{escaped_value}'"
+from app.crdt import get_document_crdt
+from app.core.utils import get_utc_now
+from app.db.session import get_db_connection, close_connection_safely
+from app.services.document_service import update_document
+from app.schemas import DocumentUpdate
 
+logger = logging.getLogger(__name__)
 
-def _format_datetime(dt: datetime | None) -> str:
-    """格式化日期时间为 SQL 字符串"""
-    if dt is None:
-        return "NULL"
-    return f"'{dt.strftime('%Y-%m-%d %H:%M:%S')}'"
+# 用户颜色列表，用于区分不同用户的光标
+USER_COLORS = [
+    "#FF5733", "#33FF57", "#3357FF", "#F333FF",
+    "#FF33A1", "#33FFF0", "#FFBD33", "#8D33FF"
+]
 
 
 class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[int, list] = {}  # doc_id -> list of conn
         self.document_crdts: Dict[int, Any] = {}  # 文档 CRDT 管理器
+        self.last_heartbeat: Dict[WebSocket, datetime] = {}
+        self.dirty_docs: Set[int] = set()
+        self._dirty_lock = asyncio.Lock()
+        self._background_task: Optional[asyncio.Task] = None
 
     async def connect(self, websocket: WebSocket, document_id: int, user_id: int, initial_content: str):
         # 注意：WebSocket 应该在路由层已经 accept，这里不再重复 accept
@@ -55,22 +63,50 @@ class ConnectionManager:
         })
 
         # 告诉房间里其他人：有真人进来了（带用户ID）
-        for conn in self.active_connections[document_id]:
+        for conn in list(self.active_connections[document_id]):
             if conn["websocket"] != websocket:
-                await conn["websocket"].send_json({
-                    "type": "user_joined",
-                    "user_id": user_id,
-                    "color": self.get_user_color(user_id)  # 给每个用户固定颜色
-                })
+                try:
+                    await conn["websocket"].send_json({
+                        "type": "user_joined",
+                        "user_id": user_id,
+                        "color": self.get_user_color(user_id)  # 给每个用户固定颜色
+                    })
+                except Exception:
+                    # 移除失效连接
+                    await self._safe_remove_connection(conn["websocket"], document_id)
 
-    def disconnect(self, websocket: WebSocket, document_id: int, user_id: int):
-        if document_id in self.active_connections:
-            self.active_connections[document_id] = [
-                c for c in self.active_connections[document_id] 
-                if c["websocket"] != websocket
-            ]
-            if not self.active_connections[document_id]:
-                del self.active_connections[document_id]
+    async def disconnect(self, document_id: int, websocket: WebSocket):
+        """异步断开连接并在房间空时触发保存"""
+        await self._safe_remove_connection(websocket, document_id)
+
+    async def _safe_remove_connection(self, websocket: WebSocket, document_id: int):
+        if document_id not in self.active_connections:
+            return
+        before = len(self.active_connections[document_id])
+        self.active_connections[document_id] = [
+            c for c in self.active_connections[document_id]
+            if c["websocket"] != websocket
+        ]
+        # 清理客户端 CRDT 记录
+        for cid, conn in list(get_document_crdt(document_id).clients.items()):
+            if conn.client_id == f"user_{getattr(websocket, '_user_id', '')}":
+                get_document_crdt(document_id).remove_client(conn.client_id)
+
+        if not self.active_connections.get(document_id):
+            # 房间为空，标记为脏并强制保存一次
+            await self.mark_dirty(document_id)
+            self.active_connections.pop(document_id, None)
+        else:
+            # 仍有其他连接，无需强制保存，但广播离开事件
+            for conn in list(self.active_connections.get(document_id, [])):
+                try:
+                    await conn["websocket"].send_json({
+                        "type": "presence",
+                        "action": "leave",
+                        "user_id": getattr(websocket, '_user_id', None),
+                    })
+                except Exception:
+                    await self._safe_remove_connection(conn["websocket"], document_id)
 
     async def broadcast_to_room(self, document_id: int, data: dict, sender_user_id: int, sender_ws: WebSocket):
         if document_id not in self.active_connections:
@@ -81,12 +117,36 @@ class ConnectionManager:
                     await conn["websocket"].send_json(data)
                 except:
                     # 如果发送失败，移除连接
-                    self.disconnect(conn["websocket"], document_id, conn["user_id"])
+                    await self._safe_remove_connection(conn["websocket"], document_id)
 
     def get_user_color(self, user_id: int) -> str:
-        # 固定颜色列表，用户ID取模，保证同一个人永远同一种颜色
-        colors = ["#FF5733", "#33FF57", "#3357FF", "#F333FF", "#FF33A1", "#33FFF0", "#FFBD33", "#8D33FF"]
-        return colors[user_id % len(colors)]
+        """获取用户的固定颜色（根据用户ID取模）"""
+        return USER_COLORS[user_id % len(USER_COLORS)]
+
+    async def handle_pong(self, websocket: WebSocket) -> None:
+        """更新心跳时间戳（兼容 ws.py 的调用）"""
+        self.last_heartbeat[websocket] = datetime.utcnow()
+
+    async def send_heartbeat_to_all(self) -> None:
+        """向所有活跃连接发送心跳（兼容 ws.py）"""
+        now = datetime.utcnow()
+        for doc_id, conns in list(self.active_connections.items()):
+            for conn in list(conns):
+                try:
+                    await conn["websocket"].send_json({"type": "ping", "ts": now.isoformat()})
+                except Exception:
+                    await self._safe_remove_connection(conn["websocket"], doc_id)
+
+    async def cleanup_dead_connections(self, document_id: int = None) -> None:
+        """清理心跳超时或无响应连接（兼容 ws.py）"""
+        rooms_to_check = [document_id] if document_id else list(self.active_connections.keys())
+        current_time = datetime.utcnow()
+        for doc_id in rooms_to_check:
+            for conn in list(self.active_connections.get(doc_id, [])):
+                ws = conn["websocket"]
+                last = self.last_heartbeat.get(ws)
+                if not last or (current_time - last).seconds > 3 * 25:
+                    await self._safe_remove_connection(ws, doc_id)
 
     async def handle_message(self, document_id: int, user_id: int, data: dict, sender_ws: WebSocket, db):
         """处理来自客户端的消息"""
@@ -127,29 +187,25 @@ class ConnectionManager:
             # 未知消息类型安全忽略，不抛异常
             return
         
-        # 更新文档内容到数据库 - 使用参数化查询避免SQL注入
+        # 更新内存中的文档状态，并标记为脏（延迟持久化）
         if content is not None:
-            now = datetime.utcnow()
-            # 使用参数化查询，直接传datetime对象
-            db.execute("UPDATE documents SET content = %s, updated_at = %s WHERE id = %s", 
-                      (content, now, document_id))
-            
-            # 同步 CRDT 状态
+            # 更新 CRDT master（以全文兼容的方式）
             doc_crdt = get_document_crdt(document_id)
             doc_crdt.master_crdt.from_text(content)
-            
+
+            # 标记为脏，稍后后台任务会持久化
+            await self.mark_dirty(document_id)
+
             # 广播内容更新给其他用户，保持协议兼容性
             broadcast_data = {
-                "type": msg_type,  # 保持原始消息类型
+                "type": msg_type,
                 "user_id": user_id
             }
-            
-            # 根据消息类型调整广播格式
             if msg_type == "content_update":
                 broadcast_data["payload"] = {"html": content}
             else:
                 broadcast_data["content"] = content
-                
+
             await self.broadcast_to_room(document_id, broadcast_data, user_id, sender_ws)
     
     async def _handle_crdt_ops(self, document_id: int, user_id: int, data: dict, sender_ws: WebSocket, db):
@@ -164,12 +220,10 @@ class ConnectionManager:
         # 应用操作
         result = doc_crdt.apply_client_ops(client_id, ops)
         
-        # 更新数据库
+        # 更新内存并标记为脏（由后台保存）
         new_content = result["text"]
-        now = datetime.utcnow()
-        db.execute("UPDATE documents SET content = %s, updated_at = %s WHERE id = %s",
-                   (new_content, now, document_id))
-        
+        await self.mark_dirty(document_id)
+
         # 广播给其他客户端
         await self.broadcast_to_room(document_id, {
             "type": "crdt_ops",
@@ -177,7 +231,7 @@ class ConnectionManager:
             "version": result["version"],
             "user_id": user_id,
         }, user_id, sender_ws)
-        
+
         # 发送确认给发送者
         await sender_ws.send_json({
             "type": "crdt_ack",
@@ -197,3 +251,43 @@ class ConnectionManager:
                 "color": self.get_user_color(conn["user_id"]),
             })
         return users
+
+    async def mark_dirty(self, document_id: int) -> None:
+        """标记文档为脏，稍后由后台任务持久化"""
+        async with self._dirty_lock:
+            self.dirty_docs.add(document_id)
+
+    async def background_save_task(self, interval_seconds: int = 5) -> None:
+        """后台周期性保存脏文档到数据库"""
+        while True:
+            try:
+                await asyncio.sleep(interval_seconds)
+                # 取出待保存文档列表
+                async with self._dirty_lock:
+                    to_save = list(self.dirty_docs)
+                    self.dirty_docs.clear()
+
+                if not to_save:
+                    continue
+
+                for doc_id in to_save:
+                    try:
+                        db = None
+                        try:
+                            db = get_db_connection()
+                            # 获取CRDT当前文本
+                            doc_crdt = get_document_crdt(doc_id)
+                            content = doc_crdt.master_crdt.to_text()
+                            # 使用服务层update_document进行参数化更新
+                            doc_update = DocumentUpdate(content=content)
+                            update_document(db, doc_id, doc_update, 0)
+                        finally:
+                            if db:
+                                close_connection_safely(db)
+                    except Exception as e:
+                        logger.exception(f"后台保存文档 {doc_id} 失败: {e}")
+            except asyncio.CancelledError:
+                logger.info("后台保存任务已取消")
+                break
+            except Exception as e:
+                logger.exception(f"后台保存任务异常: {e}")

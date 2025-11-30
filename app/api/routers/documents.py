@@ -11,9 +11,9 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import Response
 
 from app.core.security import get_current_user
-from app. db.session import get_db
+from app.db.session import get_db
 from app.schemas.comment import Comment, CommentCreate
-from app.schemas. task import Task, TaskCreate, TaskUpdate
+from app.schemas.task import Task, TaskCreate, TaskUpdate
 from app.schemas import (
     Document,
     DocumentCreate,
@@ -22,7 +22,7 @@ from app.schemas import (
     TemplateCreate,
     TemplateUpdate,
 )
-from app.services. document_service import (
+from app.services.document_service import (
     create_document,
     create_document_version,
     create_template,
@@ -51,7 +51,7 @@ from app.services. document_service import (
 )
 from app.services.audit_service import log_action
 from app.services.settings_service import is_feature_enabled
-from app.services. comment_service import create_comment, list_comments
+from app.services.comment_service import create_comment, list_comments
 from app.services.task_service import create_task, list_tasks, update_task
 
 # PDF/Word 导入导出依赖
@@ -74,32 +74,32 @@ def htmlToMarkdown(html: str) -> str:
     try:
         markdown = html
         # 标题
-        markdown = re.sub(r'<h1[^>]*>(.*?)</h1>', r'# \1', markdown, flags=re. DOTALL)
+        markdown = re.sub(r'<h1[^>]*>(.*?)</h1>', r'# \1', markdown, flags=re.DOTALL)
         markdown = re.sub(r'<h2[^>]*>(.*?)</h2>', r'## \1', markdown, flags=re.DOTALL)
         markdown = re.sub(r'<h3[^>]*>(.*?)</h3>', r'### \1', markdown, flags=re.DOTALL)
         # 强调
         markdown = re.sub(r'<strong[^>]*>(.*?)</strong>', r'**\1**', markdown, flags=re.DOTALL)
-        markdown = re.sub(r'<b[^>]*>(.*?)</b>', r'**\1**', markdown, flags=re. DOTALL)
+        markdown = re.sub(r'<b[^>]*>(.*?)</b>', r'**\1**', markdown, flags=re.DOTALL)
         markdown = re.sub(r'<em[^>]*>(.*?)</em>', r'*\1*', markdown, flags=re.DOTALL)
         markdown = re.sub(r'<i[^>]*>(.*?)</i>', r'*\1*', markdown, flags=re.DOTALL)
         # 链接
-        markdown = re.sub(r'<a[^>]*href="([^"]*)"[^>]*>(.*?)</a>', r'[\2](\1)', markdown, flags=re. DOTALL)
+        markdown = re.sub(r'<a[^>]*href="([^"]*)"[^>]*>(.*?)</a>', r'[\2](\1)', markdown, flags=re.DOTALL)
         # 图片
-        markdown = re.sub(r'<img[^>]*src="([^"]*)"[^>]*alt="([^"]*)"[^>]*>', r'! [\2](\1)', markdown, flags=re.DOTALL)
+        markdown = re.sub(r'<img[^>]*src="([^"]*)"[^>]*alt="([^"]*)"[^>]*>', r'![\2](\1)', markdown, flags=re.DOTALL)
         # 引用
-        markdown = re.sub(r'<blockquote[^>]*>(.*?)</blockquote>', r'> \1', markdown, flags=re. DOTALL)
+        markdown = re.sub(r'<blockquote[^>]*>(.*?)</blockquote>', r'> \1', markdown, flags=re.DOTALL)
         # 代码
         markdown = re.sub(r'<code[^>]*>(.*?)</code>', r'`\1`', markdown, flags=re.DOTALL)
-        markdown = re.sub(r'<pre[^>]*>(.*?)</pre>', r'```\n\1\n```', markdown, flags=re. DOTALL)
+        markdown = re.sub(r'<pre[^>]*>(.*?)</pre>', r'```\n\1\n```', markdown, flags=re.DOTALL)
         # 列表
-        markdown = re.sub(r'<ul[^>]*>(.*? )</ul>', lambda m: re.sub(r'<li[^>]*>(.*?)</li>', r'- \1', m.group(1), flags=re. DOTALL), markdown, flags=re. DOTALL)
-        markdown = re. sub(r'<ol[^>]*>(.*?)</ol>', lambda m: re.sub(r'<li[^>]*>(.*?)</li>', r'1. \1', m.group(1), flags=re. DOTALL), markdown, flags=re. DOTALL)
+        markdown = re.sub(r'<ul[^>]*>(.*?)</ul>', lambda m: re.sub(r'<li[^>]*>(.*?)</li>', r'- \1', m.group(1), flags=re.DOTALL), markdown, flags=re.DOTALL)
+        markdown = re.sub(r'<ol[^>]*>(.*?)</ol>', lambda m: re.sub(r'<li[^>]*>(.*?)</li>', r'1. \1', m.group(1), flags=re.DOTALL), markdown, flags=re.DOTALL)
         # 换行和段落
         markdown = re.sub(r'<br[^>]*>', '\n', markdown)
-        markdown = re. sub(r'<p[^>]*>(.*?)</p>', r'\1\n', markdown, flags=re.DOTALL)
+        markdown = re.sub(r'<p[^>]*>(.*?)</p>', r'\1\n', markdown, flags=re.DOTALL)
         # 移除所有剩余标签
         markdown = re.sub(r'<[^>]+>', '', markdown)
-        return markdown. strip()
+        return markdown.strip()
     except Exception:
         # 如果转换失败,返回空字符串
         return ""
@@ -113,18 +113,18 @@ def markdownToHtml(markdown: str) -> str:
     try:
         html = markdown
         # 标题
-        html = re.sub(r'^### (. +)$', r'<h3>\1</h3>', html, flags=re.MULTILINE)
-        html = re.sub(r'^## (.+)$', r'<h2>\1</h2>', html, flags=re. MULTILINE)
-        html = re. sub(r'^# (.+)$', r'<h1>\1</h1>', html, flags=re.MULTILINE)
+        html = re.sub(r'^### (.+)$', r'<h3>\1</h3>', html, flags=re.MULTILINE)
+        html = re.sub(r'^## (.+)$', r'<h2>\1</h2>', html, flags=re.MULTILINE)
+        html = re.sub(r'^# (.+)$', r'<h1>\1</h1>', html, flags=re.MULTILINE)
         # 强调和斜体
         html = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', html)
         html = re.sub(r'\*(.+?)\*', r'<em>\1</em>', html)
         # 链接
         html = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2">\1</a>', html)
         # 图片
-        html = re. sub(r'!\[([^\]]*)\]\(([^)]+)\)', r'<img src="\2" alt="\1">', html)
+        html = re.sub(r'!\[([^\]]*)\]\(([^)]+)\)', r'<img src="\2" alt="\1">', html)
         # 引用
-        html = re.sub(r'^> (.+)$', r'<blockquote>\1</blockquote>', html, flags=re. MULTILINE)
+        html = re.sub(r'^> (.+)$', r'<blockquote>\1</blockquote>', html, flags=re.MULTILINE)
         # 代码
         html = re.sub(r'```(.*?)```', r'<pre><code>\1</code></pre>', html, flags=re.DOTALL)
         html = re.sub(r'`([^`]+)`', r'<code>\1</code>', html)
@@ -153,7 +153,7 @@ async def get_documents_endpoint(
     folder: Optional[str] = None
 ):
     """获取当前用户拥有的文档列表"""
-    documents = get_documents(db, current_user. id, skip=skip, limit=limit, folder=folder)
+    documents = get_documents(db, current_user.id, skip=skip, limit=limit, folder=folder)
     return documents
 
 
@@ -187,23 +187,23 @@ async def get_folders_endpoint(
     db = Depends(get_db)
 ):
     """获取文件夹列表"""
-    folders = get_folders(db, current_user. id)
+    folders = get_folders(db, current_user.id)
     return folders
 
 
-@router. get("/tags", response_model=List[str], summary="获取标签列表", description="获取用户的所有标签")
+@router.get("/tags", response_model=List[str], summary="获取标签列表", description="获取用户的所有标签")
 async def get_tags_endpoint(
     current_user = Depends(get_current_user), 
     db = Depends(get_db)
 ):
     """获取标签列表"""
-    tags = get_tags(db, current_user. id)
+    tags = get_tags(db, current_user.id)
     return tags
 
 
 # ==================== 文档锁定/解锁相关路由 ====================
 
-@router. post("/documents/{document_id}/lock", summary="锁定文档", description="锁定文档，禁止其他用户编辑")
+@router.post("/documents/{document_id}/lock", summary="锁定文档", description="锁定文档，禁止其他用户编辑")
 async def lock_document_endpoint(
     document_id: int,
     current_user = Depends(get_current_user), 
@@ -220,7 +220,7 @@ async def lock_document_endpoint(
     if not document:
         raise HTTPException(status_code=404, detail="文档不存在")
     
-    if document. get('is_locked'):
+    if document.get('is_locked'):
         raise HTTPException(status_code=400, detail="文档已被锁定")
     
     try:
@@ -262,13 +262,13 @@ async def unlock_document_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        logger. error("解锁文档失败: %s", e, exc_info=True)
+        logger.error("解锁文档失败: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail="解锁文档失败")
 
 
 # ==================== 导出/导入相关路由 ====================
 
-@router. get("/documents/{document_id}/export", summary="导出文档", description="将文档导出为指定格式")
+@router.get("/documents/{document_id}/export", summary="导出文档", description="将文档导出为指定格式")
 async def export_document_endpoint(
     document_id: int,
     format: str = "html",
@@ -289,7 +289,7 @@ async def export_document_endpoint(
         content = document.get('content', '')
         title = document.get('title', '文档')
         
-        if format. lower() == 'markdown':
+        if format.lower() == 'markdown':
             # 简单的 HTML 到 Markdown 转换
             markdown_content = htmlToMarkdown(content)
             log_action(
@@ -328,7 +328,7 @@ async def export_document_endpoint(
         # 【注意】PDF 导出依赖于部署环境安装支持中文的字体（如 SimSun）。
         # 如果缺少相应字体，中文字符可能显示为乱码或方框。
         # 建议在服务器上安装 fonts-wqy-zenhei 或 fonts-noto-cjk 等字体包。
-        elif format. lower() == 'pdf':
+        elif format.lower() == 'pdf':
             # PDF 导出：使用 xhtml2pdf 将 HTML 转换为 PDF
             
             # 包装 HTML 内容，确保正确的编码和样式
@@ -667,7 +667,7 @@ async def create_document_endpoint(
                 user_id=current_user.id,
                 action="document.create",
                 resource_type="document",
-                resource_id=new_document. get("id"),
+                resource_id=new_document.get("id"),
                 request=request,
             )
         except Exception:
@@ -679,8 +679,8 @@ async def create_document_endpoint(
             title=new_document['title'],
             content=new_document['content'],
             status=new_document['status'],
-            folder_name=new_document. get('folder_name'),
-            tags=new_document. get('tags'),
+            folder_name=new_document.get('folder_name'),
+            tags=new_document.get('tags'),
             is_locked=new_document.get('is_locked', False),
             created_at=new_document['created_at'],
             updated_at=new_document['updated_at']
@@ -702,3 +702,432 @@ async def get_shared_documents_endpoint(
     """获取当前用户作为协作者的文档列表"""
     documents = get_shared_documents(db, current_user.id, skip=skip, limit=limit)
     return documents
+
+
+@router.get("/documents/{document_id}", response_model=Document, summary="获取文档详情", description="获取指定文档的详细信息")
+async def get_document_endpoint(
+    document_id: int,
+    current_user = Depends(get_current_user),
+    db = Depends(get_db),
+):
+    """获取文档详情"""
+    # 检查权限
+    permission = check_document_permission(db, document_id, current_user.id)
+    if not permission["can_view"]:
+        raise HTTPException(status_code=403, detail="无权访问此文档")
+    
+    document = get_document_with_collaborators(db, document_id, current_user.id)
+    if not document:
+        raise HTTPException(status_code=404, detail="文档不存在")
+    
+    return document
+
+
+@router.put("/documents/{document_id}", response_model=Document, summary="更新文档", description="更新文档内容或属性")
+async def update_document_endpoint(
+    document_id: int,
+    document_update: DocumentUpdate,
+    current_user = Depends(get_current_user),
+    db = Depends(get_db),
+    request: Request = None,
+):
+    """更新文档"""
+    # 检查权限
+    permission = check_document_permission(db, document_id, current_user.id)
+    if not permission["can_edit"]:
+        raise HTTPException(status_code=403, detail="无编辑权限")
+    
+    # 检查文档是否被锁定
+    document = get_document_with_collaborators(db, document_id, current_user.id)
+    if not document:
+        raise HTTPException(status_code=404, detail="文档不存在")
+    
+    if document.get('is_locked') and document.get('locked_by') != current_user.id:
+        raise HTTPException(status_code=423, detail="文档已被锁定，无法编辑")
+    
+    try:
+        updated_doc = update_document(db, document_id, document_update, current_user.id)
+        if not updated_doc:
+            raise HTTPException(status_code=404, detail="文档不存在")
+        
+        try:
+            log_action(
+                db,
+                user_id=current_user.id,
+                action="document.update",
+                resource_type="document",
+                resource_id=document_id,
+                request=request,
+            )
+        except Exception:
+            pass
+        
+        return updated_doc
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("更新文档失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="更新文档失败")
+
+
+@router.delete("/documents/{document_id}", summary="删除文档", description="删除指定文档")
+async def delete_document_endpoint(
+    document_id: int,
+    current_user = Depends(get_current_user),
+    db = Depends(get_db),
+    request: Request = None,
+):
+    """删除文档（仅文档所有者可删除）"""
+    # 检查是否是文档所有者
+    if not is_document_owner(db, document_id, current_user.id):
+        raise HTTPException(status_code=403, detail="只有文档所有者可以删除文档")
+    
+    try:
+        success = delete_document(db, document_id, current_user.id)
+        if not success:
+            raise HTTPException(status_code=404, detail="文档不存在")
+        
+        try:
+            log_action(
+                db,
+                user_id=current_user.id,
+                action="document.delete",
+                resource_type="document",
+                resource_id=document_id,
+                request=request,
+            )
+        except Exception:
+            pass
+        
+        return {"message": "文档已删除"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("删除文档失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="删除文档失败")
+
+
+# ==================== 文档版本相关路由 ====================
+
+@router.get("/documents/{document_id}/versions", summary="获取文档版本历史", description="获取文档的所有历史版本")
+async def get_document_versions_endpoint(
+    document_id: int,
+    current_user = Depends(get_current_user),
+    db = Depends(get_db),
+    skip: int = 0,
+    limit: int = 50,
+):
+    """获取文档版本历史"""
+    permission = check_document_permission(db, document_id, current_user.id)
+    if not permission["can_view"]:
+        raise HTTPException(status_code=403, detail="无权访问此文档")
+    
+    versions = get_document_versions(db, document_id, skip=skip, limit=limit)
+    return versions
+
+
+@router.post("/documents/{document_id}/versions", summary="创建文档版本", description="保存文档的当前状态为新版本")
+async def create_document_version_endpoint(
+    document_id: int,
+    summary: Optional[str] = None,
+    current_user = Depends(get_current_user),
+    db = Depends(get_db),
+    request: Request = None,
+):
+    """创建文档版本快照"""
+    permission = check_document_permission(db, document_id, current_user.id)
+    if not permission["can_edit"]:
+        raise HTTPException(status_code=403, detail="无编辑权限")
+    
+    try:
+        version = create_document_version(db, document_id, current_user.id, summary)
+        if not version:
+            raise HTTPException(status_code=404, detail="文档不存在")
+        
+        try:
+            log_action(
+                db,
+                user_id=current_user.id,
+                action="document.version.create",
+                resource_type="document_version",
+                resource_id=version.get("id"),
+                request=request,
+            )
+        except Exception:
+            pass
+        
+        return version
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("创建文档版本失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="创建文档版本失败")
+
+
+# ==================== 协作者管理相关路由 ====================
+
+@router.get("/documents/{document_id}/collaborators", summary="获取协作者列表", description="获取文档的所有协作者")
+async def get_collaborators_endpoint(
+    document_id: int,
+    current_user = Depends(get_current_user),
+    db = Depends(get_db),
+):
+    """获取文档协作者列表"""
+    permission = check_document_permission(db, document_id, current_user.id)
+    if not permission["can_view"]:
+        raise HTTPException(status_code=403, detail="无权访问此文档")
+    
+    collaborators = get_collaborators(db, document_id)
+    return collaborators
+
+
+@router.post("/documents/{document_id}/collaborators", summary="添加协作者", description="添加单个或多个协作者到文档")
+async def add_collaborators_endpoint(
+    document_id: int,
+    user_ids: List[int],
+    permission: str = "edit",
+    current_user = Depends(get_current_user),
+    db = Depends(get_db),
+    request: Request = None,
+):
+    """添加协作者"""
+    # 只有文档所有者可以添加协作者
+    if not is_document_owner(db, document_id, current_user.id):
+        raise HTTPException(status_code=403, detail="只有文档所有者可以添加协作者")
+    
+    try:
+        if len(user_ids) == 1:
+            result = add_collaborator(db, document_id, user_ids[0], permission)
+        else:
+            result = batch_add_collaborators(db, document_id, user_ids, permission)
+        
+        try:
+            log_action(
+                db,
+                user_id=current_user.id,
+                action="document.collaborator.add",
+                resource_type="document",
+                resource_id=document_id,
+                request=request,
+                meta={"added_users": user_ids},
+            )
+        except Exception:
+            pass
+        
+        return {"message": "协作者已添加", "result": result}
+    except Exception as e:
+        logger.error("添加协作者失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="添加协作者失败")
+
+
+@router.delete("/documents/{document_id}/collaborators/{user_id}", summary="移除协作者", description="从文档中移除协作者")
+async def remove_collaborator_endpoint(
+    document_id: int,
+    user_id: int,
+    current_user = Depends(get_current_user),
+    db = Depends(get_db),
+    request: Request = None,
+):
+    """移除协作者"""
+    # 只有文档所有者可以移除协作者
+    if not is_document_owner(db, document_id, current_user.id):
+        raise HTTPException(status_code=403, detail="只有文档所有者可以移除协作者")
+    
+    try:
+        success = remove_collaborator(db, document_id, user_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="协作者不存在")
+        
+        try:
+            log_action(
+                db,
+                user_id=current_user.id,
+                action="document.collaborator.remove",
+                resource_type="document",
+                resource_id=document_id,
+                request=request,
+                meta={"removed_user": user_id},
+            )
+        except Exception:
+            pass
+        
+        return {"message": "协作者已移除"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("移除协作者失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="移除协作者失败")
+
+
+# ==================== 模板相关路由 ====================
+
+@router.get("/templates", summary="获取模板列表", description="获取所有可用的文档模板")
+async def get_templates_endpoint(
+    category: Optional[str] = None,
+    current_user = Depends(get_current_user),
+    db = Depends(get_db),
+    skip: int = 0,
+    limit: int = 50,
+):
+    """获取模板列表"""
+    templates = get_templates(db, category=category, skip=skip, limit=limit)
+    return templates
+
+
+@router.get("/templates/{template_id}", response_model=Template, summary="获取模板详情", description="获取指定模板的详细信息")
+async def get_template_endpoint(
+    template_id: int,
+    current_user = Depends(get_current_user),
+    db = Depends(get_db),
+):
+    """获取模板详情"""
+    template = get_template(db, template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="模板不存在")
+    return template
+
+
+@router.post("/templates", response_model=Template, status_code=status.HTTP_201_CREATED, summary="创建模板", description="创建新的文档模板（仅管理员）")
+async def create_template_endpoint(
+    template: TemplateCreate,
+    current_user = Depends(get_current_user),
+    db = Depends(get_db),
+    request: Request = None,
+):
+    """创建模板（仅管理员）"""
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="只有管理员可以创建模板")
+    
+    try:
+        new_template = create_template(db, template)
+        
+        try:
+            log_action(
+                db,
+                user_id=current_user.id,
+                action="template.create",
+                resource_type="template",
+                resource_id=new_template.get("id"),
+                request=request,
+            )
+        except Exception:
+            pass
+        
+        return new_template
+    except Exception as e:
+        logger.error("创建模板失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="创建模板失败")
+
+
+@router.put("/templates/{template_id}", response_model=Template, summary="更新模板", description="更新模板内容（仅管理员）")
+async def update_template_endpoint(
+    template_id: int,
+    template_update: TemplateUpdate,
+    current_user = Depends(get_current_user),
+    db = Depends(get_db),
+    request: Request = None,
+):
+    """更新模板（仅管理员）"""
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="只有管理员可以更新模板")
+    
+    try:
+        updated_template = update_template(db, template_id, template_update)
+        if not updated_template:
+            raise HTTPException(status_code=404, detail="模板不存在")
+        
+        try:
+            log_action(
+                db,
+                user_id=current_user.id,
+                action="template.update",
+                resource_type="template",
+                resource_id=template_id,
+                request=request,
+            )
+        except Exception:
+            pass
+        
+        return updated_template
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("更新模板失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="更新模板失败")
+
+
+@router.delete("/templates/{template_id}", summary="删除模板", description="删除指定模板（仅管理员）")
+async def delete_template_endpoint(
+    template_id: int,
+    current_user = Depends(get_current_user),
+    db = Depends(get_db),
+    request: Request = None,
+):
+    """删除模板（仅管理员）"""
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="只有管理员可以删除模板")
+    
+    try:
+        success = delete_template(db, template_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="模板不存在")
+        
+        try:
+            log_action(
+                db,
+                user_id=current_user.id,
+                action="template.delete",
+                resource_type="template",
+                resource_id=template_id,
+                request=request,
+            )
+        except Exception:
+            pass
+        
+        return {"message": "模板已删除"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("删除模板失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="删除模板失败")
+
+
+# ==================== 任务更新路由 ====================
+
+@router.put("/documents/{document_id}/tasks/{task_id}", response_model=Task, summary="更新任务")
+async def update_task_endpoint(
+    document_id: int,
+    task_id: int,
+    task_update: TaskUpdate,
+    current_user = Depends(get_current_user),
+    db = Depends(get_db),
+    request: Request = None,
+):
+    """更新任务"""
+    permission = check_document_permission(db, document_id, current_user.id)
+    if not permission["can_edit"]:
+        raise HTTPException(status_code=403, detail="无编辑权限")
+    
+    try:
+        updated_task = update_task(db, task_id, task_update, current_user.id)
+        if not updated_task:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        
+        try:
+            log_action(
+                db,
+                user_id=current_user.id,
+                action="task.update",
+                resource_type="task",
+                resource_id=task_id,
+                request=request,
+            )
+        except Exception:
+            pass
+        
+        return updated_task
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("更新任务失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="更新任务失败")

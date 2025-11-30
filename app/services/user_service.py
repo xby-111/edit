@@ -2,59 +2,24 @@
 用户服务层 - 使用 py-opengauss 直接 SQL 操作
 """
 import logging
+import random
+from datetime import datetime, timedelta
+from typing import Optional, Dict, Any, List
+
 from app.schemas import UserCreate
 from app.core.security import get_password_hash
-from datetime import datetime
-import random
-from datetime import timedelta
+from app.core.utils import (
+    escape_sql_string as _escape,
+    format_sql_bool as _format_bool,
+    format_sql_datetime as _format_datetime,
+    parse_datetime as _parse_db_datetime,
+)
 
 logger = logging.getLogger(__name__)
 
-def _escape(value: str | None) -> str:
-    """简单转义单引号，避免 SQL 语法错误（内部使用即可）"""
-    if value is None:
-        return "NULL"
-    escaped_value = value.replace("'", "''")
-    return f"'{escaped_value}'"
-
-def _format_bool(value: bool | None) -> str:
-    """格式化布尔值为 SQL 字符串"""
-    if value is None:
-        return "NULL"
-    return "TRUE" if value else "FALSE"
-
-def _format_datetime(dt: datetime | None) -> str:
-    """格式化日期时间为 SQL 字符串（仅用于拼接SQL，参数化时不要用）"""
-    if dt is None:
-        return "NULL"
-    return f"'{dt.strftime('%Y-%m-%d %H:%M:%S')}'"
-
-def _parse_db_datetime(dt_value) -> datetime | None:
-    """解析数据库返回的datetime值（兼容多种格式）"""
-    if dt_value is None:
-        return None
-    
-    if isinstance(dt_value, datetime):
-        return dt_value
-    
-    if isinstance(dt_value, str):
-        # 尝试解析常见格式
-        formats = [
-            '%Y-%m-%d %H:%M:%S',
-            '%Y-%m-%d %H:%M:%S.%f',
-            '%Y-%m-%dT%H:%M:%S',
-            '%Y-%m-%dT%H:%M:%S.%f',
-            '%Y-%m-%dT%H:%M:%SZ',
-            '%Y-%m-%dT%H:%M:%S.%fZ'
-        ]
-        
-        for fmt in formats:
-            try:
-                return datetime.strptime(dt_value, fmt)
-            except ValueError:
-                continue
-    
-    return None
+# 用户表字段列表
+USER_FIELDS = "id, username, email, phone, is_active, role, avatar_url, full_name, bio, address, phone_secondary, created_at, updated_at"
+USER_FIELDS_WITH_PASSWORD = "id, username, email, phone, is_active, role, hashed_password, created_at, updated_at"
 
 # 可更新用户字段白名单（防止字段名注入）
 _UPDATABLE_USER_FIELDS = {
@@ -62,106 +27,105 @@ _UPDATABLE_USER_FIELDS = {
     'avatar_url', 'phone_secondary', 'is_active', 'role'
 }
 
-def get_user_by_id(db, user_id: int):
+
+def _row_to_user_dict(row, include_password: bool = False) -> Dict[str, Any]:
+    """将数据库行转换为用户字典"""
+    if include_password:
+        return {
+            'id': row[0],
+            'username': row[1],
+            'email': row[2],
+            'phone': row[3],
+            'is_active': row[4],
+            'role': row[5],
+            'hashed_password': row[6],
+            'created_at': row[7],
+            'updated_at': row[8]
+        }
+    return {
+        'id': row[0],
+        'username': row[1],
+        'email': row[2],
+        'phone': row[3],
+        'is_active': row[4],
+        'role': row[5],
+        'avatar_url': row[6],
+        'full_name': row[7],
+        'bio': row[8],
+        'address': row[9],
+        'phone_secondary': row[10],
+        'created_at': row[11],
+        'updated_at': row[12]
+    }
+
+
+def _row_to_basic_user_dict(row) -> Dict[str, Any]:
+    """将基本用户信息行转换为字典"""
+    return {
+        'id': row[0],
+        'username': row[1],
+        'email': row[2],
+        'phone': row[3],
+        'is_active': row[4],
+        'role': row[5],
+        'created_at': row[6],
+        'updated_at': row[7]
+    }
+
+def get_user_by_id(db, user_id: int) -> Optional[Dict[str, Any]]:
     """获取用户 - 使用 py-opengauss 的 query 方法"""
-    # 使用参数化查询，兼容层会处理占位符转换
-    rows = db.query("SELECT id, username, email, phone, is_active, role, avatar_url, full_name, bio, address, phone_secondary, created_at, updated_at FROM users WHERE id = %s LIMIT 1", (user_id,))
-    
+    rows = db.query(
+        f"SELECT {USER_FIELDS} FROM users WHERE id = %s LIMIT 1",
+        (user_id,)
+    )
     if rows:
-        result = rows[0]  # 取第一行
-        return {
-            'id': result[0],
-            'username': result[1],
-            'email': result[2],
-            'phone': result[3],
-            'is_active': result[4],
-            'role': result[5],
-            'avatar_url': result[6],
-            'full_name': result[7],
-            'bio': result[8],
-            'address': result[9],
-            'phone_secondary': result[10],
-            'created_at': result[11],
-            'updated_at': result[12]
-        }
+        return _row_to_user_dict(rows[0])
     return None
 
-def get_user_by_username(db, username: str):
+
+def get_user_by_username(db, username: str) -> Optional[Dict[str, Any]]:
     """通过用户名获取用户 - 使用 py-opengauss 的 query 方法"""
-    # 使用参数化查询，兼容层会处理占位符转换
-    rows = db.query("SELECT id, username, email, phone, is_active, role, hashed_password, created_at, updated_at FROM users WHERE username = %s LIMIT 1", (username,))
-    
+    rows = db.query(
+        f"SELECT {USER_FIELDS_WITH_PASSWORD} FROM users WHERE username = %s LIMIT 1",
+        (username,)
+    )
     if rows:
-        result = rows[0]  # 取第一行
-        return {
-            'id': result[0],
-            'username': result[1],
-            'email': result[2],
-            'phone': result[3],
-            'is_active': result[4],
-            'role': result[5],
-            'hashed_password': result[6],
-            'created_at': result[7],
-            'updated_at': result[8]
-        }
+        return _row_to_user_dict(rows[0], include_password=True)
     return None
 
-def get_user_by_email(db, email: str):
+
+def get_user_by_email(db, email: str) -> Optional[Dict[str, Any]]:
     """通过邮箱获取用户 - 使用 py-opengauss 的 query 方法"""
-    # 使用参数化查询，兼容层会处理占位符转换
-    rows = db.query("SELECT id, username, email, phone, is_active, role, created_at, updated_at FROM users WHERE email = %s LIMIT 1", (email,))
-    
+    rows = db.query(
+        "SELECT id, username, email, phone, is_active, role, created_at, updated_at "
+        "FROM users WHERE email = %s LIMIT 1",
+        (email,)
+    )
     if rows:
-        result = rows[0]  # 取第一行
-        return {
-            'id': result[0],
-            'username': result[1],
-            'email': result[2],
-            'phone': result[3],
-            'is_active': result[4],
-            'role': result[5],
-            'created_at': result[6],
-            'updated_at': result[7]
-        }
+        return _row_to_basic_user_dict(rows[0])
     return None
 
-def get_user_by_phone(db, phone: str):
+
+def get_user_by_phone(db, phone: str) -> Optional[Dict[str, Any]]:
     """通过手机号获取用户 - 使用 py-opengauss 的 query 方法"""
-    # 使用参数化查询，兼容层会处理占位符转换
-    rows = db.query("SELECT id, username, email, phone, is_active, role, created_at, updated_at FROM users WHERE phone = %s LIMIT 1", (phone,))
-    
+    rows = db.query(
+        "SELECT id, username, email, phone, is_active, role, created_at, updated_at "
+        "FROM users WHERE phone = %s LIMIT 1",
+        (phone,)
+    )
     if rows:
-        result = rows[0]  # 取第一行
-        return {
-            'id': result[0],
-            'username': result[1],
-            'email': result[2],
-            'phone': result[3],
-            'is_active': result[4],
-            'role': result[5],
-            'created_at': result[6],
-            'updated_at': result[7]
-        }
+        return _row_to_basic_user_dict(rows[0])
     return None
 
-def get_users(db, skip: int = 0, limit: int = 100):
+
+def get_users(db, skip: int = 0, limit: int = 100) -> List[Dict[str, Any]]:
     """获取用户列表 - 使用 py-opengauss 的 query 方法"""
-    # 使用参数化查询，兼容层会处理占位符转换
-    rows = db.query("SELECT id, username, email, phone, is_active, role, created_at, updated_at FROM users ORDER BY id LIMIT %s OFFSET %s", (limit, skip))
-    
-    users = []
-    for result in rows:
-        users.append({
-            'id': result[0],
-            'username': result[1],
-            'email': result[2],
-            'phone': result[3],
-            'is_active': result[4],
-            'role': result[5],
-            'created_at': result[6],
-            'updated_at': result[7]
-        })
-    return users
+    rows = db.query(
+        "SELECT id, username, email, phone, is_active, role, created_at, updated_at "
+        "FROM users ORDER BY id LIMIT %s OFFSET %s",
+        (limit, skip)
+    )
+    return [_row_to_basic_user_dict(row) for row in rows]
 
 def create_user(db, user: UserCreate):
     """

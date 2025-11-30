@@ -7,6 +7,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, Depends
 from jose import JWTError, jwt, ExpiredSignatureError, JWSError
 from app.db.session import get_db_connection, close_connection_safely
 from app.services.document_service import get_document, update_document
+from app.services.websocket_service import ConnectionManager as ServiceConnectionManager
 
 from app.core.config import settings
 
@@ -188,7 +189,8 @@ async def test_websocket(websocket: WebSocket):
     await websocket.close()
 
 
-manager = ConnectionManager()
+# 使用 service 层实现的 ConnectionManager（支持 CRDT、写后持久化）
+manager = ServiceConnectionManager()
 
 
 def decode_username_from_token(token: str) -> str:
@@ -289,21 +291,10 @@ async def document_collab_ws(
             close_connection_safely(db)
             return
         
-        # 权限验证通过，现在可以安全地调用connect
-        await manager.connect(document_id, websocket, current_username, user_id, db)
-        
-        # 获取文档内容
+        # 权限验证通过，现在使用 service 层进行连接注册
+        # 获取文档内容并用作初始化内容传给 service
         doc = get_document_with_collaborators(db, document_id, user_id)
-        if doc:
-            await websocket.send_json({
-                "type": "init",
-                "payload": {"html": doc.get("content") or ""},
-                "doc_id": document_id,
-                "user": "System",
-                "ts": datetime.utcnow().isoformat(),
-                "permissions": permission  # 发送权限信息
-            })
-        else:
+        if not doc:
             logger.warning(f"无法加载文档 {document_id} 的内容，关闭连接")
             try:
                 await websocket.close(code=1008, reason="Document not found")
@@ -315,6 +306,20 @@ async def document_collab_ws(
             except Exception:
                 pass
             return
+
+        initial_content = doc.get("content") if doc else ""
+        await manager.connect(websocket, document_id, user_id, initial_content)
+
+        # 发送初始化存在信息（在线用户与权限）
+        await websocket.send_json({
+            "type": "presence",
+            "action": "init",
+            "doc_id": document_id,
+            "online_users": [u.get("user_id") for u in manager.get_online_users(document_id)],
+            "online_users_info": manager.get_online_users(document_id),
+            "ts": datetime.utcnow().isoformat(),
+            "permissions": permission,
+        })
             
     except Exception as e:
         logger.exception(f"获取文档内容时出错")
@@ -381,96 +386,35 @@ async def document_collab_ws(
                 continue
 
             try:
-                # 对于content_update消息，需要先验证权限再广播
-                if msg_type == "content_update" and isinstance(payload, dict) and "html" in payload:
-                    try:
-                        # 校验payload结构
+                # 对所有已知消息类型，委托给 service 层统一处理
+                # 但对于会修改文档的消息（全文 content/content_update 或增量 crdt_ops），先做权限和大小校验
+                edit_types = {"content_update", "content", "crdt_ops"}
+                if msg_type in edit_types:
+                    # 简单大小检测（仅对 content_update 的 html 字段）
+                    if msg_type == "content_update" and isinstance(payload, dict) and "html" in payload:
                         html_content = payload.get("html")
                         if not isinstance(html_content, str):
                             logger.warning(f"无效的HTML内容类型: {type(html_content)}，断开连接")
                             break
-                        
-                        # 检查内容大小（2MB限制）
                         if len(html_content.encode('utf-8')) > 2 * 1024 * 1024:
-                            logger.warning(f"HTML内容过大，拒绝保存: {len(html_content.encode('utf-8'))} bytes")
-                            # 发送错误消息给客户端
-                            error_message = {
-                                "type": "error",
-                                "payload": {"message": "内容过大，超过2MB限制"},
-                                "doc_id": document_id,
-                                "user": "System",
-                                "ts": datetime.utcnow().isoformat(),
-                            }
-                            try:
-                                await websocket.send_json(error_message)
-                                logger.info("已发送内容过大错误消息")
-                            except Exception as e:
-                                logger.error(f"发送错误消息失败: {e}")
-                            continue
-                            
-                        # 检查编辑权限（必须在广播之前检查）
-                        permission = check_document_permission(db, document_id, user_id)
-                        if not permission["can_edit"]:
-                            logger.warning(f"用户{user_id}无编辑权限，拒绝content_update（角色: {'viewer' if not permission['can_edit'] else 'editor'}）")
-                            # 发送权限错误消息，不广播，不落库
-                            error_message = {
-                                "type": "error",
-                                "payload": {"message": "无编辑权限"},
-                                "doc_id": document_id,
-                                "user": "System",
-                                "ts": datetime.utcnow().isoformat(),
-                            }
+                            error_message = {"type": "error", "payload": {"message": "内容过大，超过2MB限制"}, "doc_id": document_id, "user": "System"}
                             try:
                                 await websocket.send_json(error_message)
                             except Exception:
                                 pass
-                            continue  # 不广播，不落库
-                        
-                        # 权限验证通过，继续处理
-                        # 更新文档内容到数据库（先持久化）
-                        from app.schemas import DocumentUpdate
-                        doc_update = DocumentUpdate(content=html_content)
-                        
-                        # 获取文档信息
-                        doc_info = get_document_with_collaborators(db, document_id, user_id)
-                        if not doc_info:
-                            logger.warning(f"无法获取文档{document_id}信息")
                             continue
-                            
-                        # 使用实际操作者ID进行更新，而不是owner_id
-                        # 修改update_document调用，传递user_id而不是owner_id
-                        updated_doc = update_document(db, document_id, doc_update, user_id)
-                        
-                        if not updated_doc:
-                            logger.warning(f"用户{user_id}更新文档{document_id}失败")
-                            continue
-                        
-                        logger.info(f"文档{document_id}内容已保存（用户{user_id}）")
-                        
-                        # 持久化成功后，构建广播消息并广播
-                        broadcast_message = {
-                            "type": msg_type,
-                            "doc_id": document_id,
-                            "user": current_username,
-                            "payload": payload,
-                            "ts": datetime.utcnow().isoformat(),
-                        }
-                        await manager.broadcast(document_id, broadcast_message, sender=websocket)
-                        
-                    except Exception as e:
-                        logger.exception(f"处理content_update消息失败")
+
+                    # 权限检查
+                    permission = check_document_permission(db, document_id, user_id)
+                    if not permission.get("can_edit"):
+                        try:
+                            await websocket.send_json({"type": "error", "payload": {"message": "无编辑权限"}})
+                        except Exception:
+                            pass
                         continue
-                else:
-                    # 非content_update消息（如cursor、presence），直接广播
-                    broadcast_message = {
-                        "type": msg_type,
-                        "doc_id": document_id,
-                        "user": current_username,
-                        "payload": payload,
-                        "ts": datetime.utcnow().isoformat(),
-                    }
-                    await manager.broadcast(document_id, broadcast_message, sender=websocket)
-                        
+
+                # 委托给 service 层来处理（CRDT、广播、标记脏数据等）
+                await manager.handle_message(document_id, user_id, message, websocket, db)
             except Exception as e:
                 logger.error(f"处理{msg_type}消息时出错: {e}")
                 # 继续处理其他消息，不中断连接

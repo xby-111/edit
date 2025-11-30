@@ -1,4 +1,4 @@
-// static/editor.js - 增强版协同编辑器（支持富文本和自动保存）
+// static/editor.js - 增强版协同编辑器（支持富文本、CRDT 增量同步和自动保存）
 let ws;
 let documentId = 1;
 let localContent = ""; // 本地内容缓存，用于增量同步
@@ -9,18 +9,131 @@ let apiClient = null;
 // WebSocket 重连配置
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 10;
-const RECONNECT_INTERVAL = 3000; // 3 秒
+const BASE_RECONNECT_INTERVAL = 1000; // 基础重连间隔 1 秒
+const MAX_RECONNECT_INTERVAL = 30000; // 最大重连间隔 30 秒
 let currentToken = ""; // 保存当前 token 用于重连
 
 // 内容发送防抖定时器
 let contentSendTimer = null;
-const CONTENT_SEND_DEBOUNCE = 300; // 300ms 防抖
+const CONTENT_SEND_DEBOUNCE = 100; // 100ms 防抖（CRDT 可以更快）
 
 // 标志：是否正在接收远程更新，防止循环
 let isReceivingRemoteUpdate = false;
 
-// 通过 WebSocket 发送内容更新
-function sendContentUpdate() {
+// CRDT 状态
+let crdtVersion = 0; // 当前 CRDT 版本
+let pendingOps = []; // 待确认的操作
+let useCRDT = true; // 是否使用 CRDT 模式（可降级为全量同步）
+
+// 客户端 ID（用于 CRDT 操作标识）
+const clientId = 'client_' + Math.random().toString(36).substr(2, 9);
+
+/**
+ * 将 Quill Delta 转换为 CRDT 操作序列
+ * @param {Object} delta - Quill delta 对象
+ * @param {number} baseIndex - 起始索引
+ * @returns {Array} CRDT 操作数组
+ */
+function deltaToOps(delta, baseIndex = 0) {
+    const ops = [];
+    let index = baseIndex;
+    const timestamp = Date.now();
+    
+    if (!delta || !delta.ops) return ops;
+    
+    for (const op of delta.ops) {
+        if (op.retain !== undefined) {
+            // retain：保持位置不变，移动索引
+            index += op.retain;
+        } else if (op.insert !== undefined) {
+            // insert：插入文本或嵌入对象
+            const text = typeof op.insert === 'string' ? op.insert : '\n';
+            for (let i = 0; i < text.length; i++) {
+                ops.push({
+                    type: 'insert',
+                    position: index + i,
+                    char: text[i],
+                    client_id: clientId,
+                    timestamp: timestamp + i * 0.001, // 确保顺序
+                    op_id: `${clientId}:${timestamp}:${index + i}`
+                });
+            }
+            index += text.length;
+        } else if (op.delete !== undefined) {
+            // delete：删除字符
+            for (let i = 0; i < op.delete; i++) {
+                ops.push({
+                    type: 'delete',
+                    position: index, // 删除时位置不变（后面的字符会前移）
+                    client_id: clientId,
+                    timestamp: timestamp + i * 0.001,
+                    op_id: `${clientId}:${timestamp}:del:${i}`
+                });
+            }
+            // 删除操作不移动 index（因为字符被删除了）
+        }
+    }
+    
+    return ops;
+}
+
+/**
+ * 将 CRDT 操作应用到 Quill 编辑器
+ * @param {Array} ops - CRDT 操作数组
+ */
+function applyOpsToEditor(ops) {
+    if (!window.quillEditor || !ops || ops.length === 0) return;
+    
+    // 按位置和时间戳排序操作
+    const sortedOps = [...ops].sort((a, b) => {
+        if (a.position !== b.position) return a.position - b.position;
+        return a.timestamp - b.timestamp;
+    });
+    
+    // 转换为 Quill delta
+    const delta = { ops: [] };
+    let currentPos = 0;
+    
+    for (const op of sortedOps) {
+        if (op.type === 'insert') {
+            if (op.position > currentPos) {
+                delta.ops.push({ retain: op.position - currentPos });
+                currentPos = op.position;
+            }
+            delta.ops.push({ insert: op.char });
+            currentPos += 1;
+        } else if (op.type === 'delete') {
+            if (op.position > currentPos) {
+                delta.ops.push({ retain: op.position - currentPos });
+                currentPos = op.position;
+            }
+            delta.ops.push({ delete: 1 });
+        }
+    }
+    
+    // 应用 delta
+    if (delta.ops.length > 0) {
+        window.quillEditor.updateContents(delta, 'silent');
+    }
+}
+
+/**
+ * 计算指数退避重连间隔
+ * @param {number} attempt - 当前重连尝试次数
+ * @returns {number} 重连间隔（毫秒）
+ */
+function getReconnectInterval(attempt) {
+    // 指数退避 + 随机抖动
+    const interval = Math.min(
+        BASE_RECONNECT_INTERVAL * Math.pow(2, attempt - 1),
+        MAX_RECONNECT_INTERVAL
+    );
+    // 添加 0-1000ms 的随机抖动，避免雷群效应
+    return interval + Math.random() * 1000;
+}
+
+// 通过 WebSocket 发送内容更新（支持 CRDT 增量和全量回退）
+function sendContentUpdate(delta = null) {
     // 如果正在接收远程更新，不发送，防止循环
     if (isReceivingRemoteUpdate) {
         console.log('正在接收远程更新，跳过发送');
@@ -32,6 +145,22 @@ function sendContentUpdate() {
     // 防抖处理
     clearTimeout(contentSendTimer);
     contentSendTimer = setTimeout(() => {
+        // 如果有 delta 且启用 CRDT，发送增量操作
+        if (useCRDT && delta && delta.ops && delta.ops.length > 0) {
+            const ops = deltaToOps(delta);
+            if (ops.length > 0) {
+                pendingOps.push(...ops);
+                ws.send(JSON.stringify({
+                    type: "crdt_ops",
+                    ops: ops,
+                    version: crdtVersion
+                }));
+                console.log('CRDT 增量操作已发送:', ops.length, '个操作');
+                return;
+            }
+        }
+        
+        // 回退到全量同步
         const currentContent = window.getCurrentContent ? window.getCurrentContent() : 
             (window.quillEditor ? window.quillEditor.root.innerHTML : 
             (document.getElementById("editor")?.value || ""));
@@ -42,13 +171,13 @@ function sendContentUpdate() {
         // 更新本地内容缓存
         localContent = currentContent;
         
-        // 通过 WebSocket 发送内容更新
+        // 通过 WebSocket 发送全量内容更新
         ws.send(JSON.stringify({
             type: "content_update",
             payload: { html: currentContent }
         }));
         
-        console.log('WebSocket 内容更新已发送');
+        console.log('WebSocket 全量内容更新已发送');
     }, CONTENT_SEND_DEBOUNCE);
 }
 
@@ -132,6 +261,35 @@ function connect(doc_id, token) {
         // 处理心跳消息
         if (msg.type === "ping") {
             ws.send(JSON.stringify({ type: "pong" }));
+            return;
+        }
+        
+        // 处理 CRDT 操作确认
+        if (msg.type === "crdt_ack") {
+            crdtVersion = msg.version || crdtVersion;
+            // 清理已确认的操作
+            const appliedCount = msg.applied || 0;
+            pendingOps.splice(0, appliedCount);
+            console.log('CRDT 确认，版本:', crdtVersion);
+            return;
+        }
+        
+        // 处理远程 CRDT 操作
+        if (msg.type === "crdt_ops") {
+            const ops = msg.ops || [];
+            if (ops.length > 0 && msg.user_id !== clientId) {
+                isReceivingRemoteUpdate = true;
+                applyOpsToEditor(ops);
+                crdtVersion = msg.version || crdtVersion;
+                // 更新本地内容缓存
+                if (window.quillEditor) {
+                    localContent = window.quillEditor.root.innerHTML;
+                }
+                setTimeout(() => {
+                    isReceivingRemoteUpdate = false;
+                }, 50);
+                console.log('应用远程 CRDT 操作:', ops.length, '个');
+            }
             return;
         }
         
@@ -282,14 +440,15 @@ function connect(doc_id, token) {
         console.log("WS 断开", event.code, event.reason);
         updateConnectionStatus('disconnected');
         
-        // 尝试自动重连
+        // 尝试自动重连（指数退避）
         if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
             reconnectAttempts++;
             updateConnectionStatus('reconnecting');
-            console.log(`尝试重连... (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
+            const interval = getReconnectInterval(reconnectAttempts);
+            console.log(`尝试重连... (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})，等待 ${Math.round(interval/1000)}s`);
             setTimeout(() => {
                 connect(documentId, currentToken);
-            }, RECONNECT_INTERVAL);
+            }, interval);
         } else {
             console.log("已达到最大重连次数");
             alert('连接已断开，请刷新页面重新连接');
@@ -327,11 +486,11 @@ function setupEditor() {
     
     // 监听编辑器内容变化
     if (window.quillEditor) {
-        // Quill 编辑器 - 监听 text-change 事件
+        // Quill 编辑器 - 监听 text-change 事件，传递 delta 以支持 CRDT
         window.quillEditor.on('text-change', function(delta, oldDelta, source) {
             // 只处理用户输入，忽略程序化更改
             if (source === 'user') {
-                sendContentUpdate();
+                sendContentUpdate(delta); // 传递 delta 用于 CRDT 转换
                 // 同时触发本地草稿保存
                 window.autoSave();
             }

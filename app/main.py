@@ -24,6 +24,7 @@ app = FastAPI(
 # 后台任务句柄，避免重复创建
 _ws_cleanup_task = None
 _ws_heartbeat_task = None
+_ws_background_save_task = None
 
 
 @app.on_event("startup")
@@ -41,6 +42,14 @@ async def on_startup() -> None:
     if _ws_heartbeat_task is None or _ws_heartbeat_task.done():
         _ws_heartbeat_task = asyncio.create_task(ws.heartbeat_task())
         print("WebSocket 心跳任务已启动")
+    
+    # 启动 WebSocket 服务层的后台保存任务（如果可用）
+    try:
+        if getattr(ws, 'manager', None) and _ws_background_save_task is None:
+            _ws_background_save_task = asyncio.create_task(ws.manager.background_save_task())
+            print("WebSocket 后台保存任务已启动")
+    except Exception as e:
+        print(f"启动后台保存任务失败: {e}")
 
 
 @app.on_event("shutdown")
@@ -65,6 +74,13 @@ async def on_shutdown() -> None:
             await _ws_heartbeat_task
         except asyncio.CancelledError:
             print("WebSocket 心跳任务已取消")
+    
+    if _ws_background_save_task and not _ws_background_save_task.done():
+        _ws_background_save_task.cancel()
+        try:
+            await _ws_background_save_task
+        except asyncio.CancelledError:
+            print("WebSocket 后台保存任务已取消")
     
     print("后台任务已全部关闭")
 
