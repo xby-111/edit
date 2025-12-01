@@ -377,10 +377,15 @@ function connect(doc_id, token) {
     documentId = doc_id;
     currentToken = token; // 保存 token 用于重连
     
-    // 从 localStorage 获取当前用户的 user_id（用于过滤自己的消息）
+    // 从 localStorage 获取当前用户的 user_id
+    // 强制转换为数字，防止类型不匹配导致的比较问题
     const storedUserId = localStorage.getItem('user_id');
-    localUserId = storedUserId ? parseInt(storedUserId, 10) : null;
-    console.log('当前用户 ID:', localUserId);
+    localUserId = storedUserId ? Number(storedUserId) : null;
+    // 如果转换失败（NaN），设置为 null
+    if (localUserId !== null && isNaN(localUserId)) {
+        localUserId = null;
+    }
+    console.log('当前本地用户 ID:', localUserId, typeof localUserId);
     
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const tokenPart = token ? `?token=${token}` : '';
@@ -409,8 +414,9 @@ function connect(doc_id, token) {
         // 处理远程 CRDT 操作
         if (msg.type === "crdt_ops") {
             const ops = msg.ops || [];
-            // 使用数字 user_id 进行比较，过滤自己发送的操作
-            if (ops.length > 0 && msg.user_id !== localUserId) {
+            // 确保用数字类型进行比较，过滤自己发送的操作
+            const msgUserId = Number(msg.user_id);
+            if (ops.length > 0 && msgUserId !== localUserId) {
                 isReceivingRemoteUpdate = true;
                 applyOpsToEditor(ops);
                 crdtVersion = msg.version || crdtVersion;
@@ -529,7 +535,9 @@ function connect(doc_id, token) {
         }
         if (msg.type === "content" || msg.type === "content_update") {
             // 过滤自己发送的内容更新，防止回环
-            if (msg.user_id === localUserId) {
+            // 确保用数字类型进行比较
+            const msgUserId = Number(msg.user_id);
+            if (msgUserId === localUserId) {
                 console.log('跳过自己发送的内容更新');
                 return;
             }

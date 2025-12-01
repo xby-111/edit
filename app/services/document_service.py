@@ -793,6 +793,40 @@ def delete_document(db, document_id: int, owner_id: int) -> bool:
         raise
 
 
+def update_document_internal(db, document_id: int, content: str) -> bool:
+    """
+    内部更新文档内容（无权限检查，仅供后台任务使用）
+    
+    此函数绕过权限检查，直接更新文档内容。
+    仅应用于 WebSocket 后台保存任务等内部场景。
+    
+    Args:
+        db: 数据库连接对象
+        document_id: 文档ID
+        content: 新的文档内容
+        
+    Returns:
+        True 表示更新成功，False 表示文档不存在
+    """
+    try:
+        # 检查文档是否存在
+        doc_rows = db.query(f"SELECT id FROM {TABLE_DOCUMENTS} WHERE id = %s LIMIT 1", (document_id,))
+        if not doc_rows:
+            logger.warning(f"内部更新失败: 文档 {document_id} 不存在")
+            return False
+        
+        # 直接更新内容和更新时间
+        escaped_content = _escape(content)
+        update_time = _format_datetime(datetime.utcnow())
+        sql = f"UPDATE {TABLE_DOCUMENTS} SET content = {escaped_content}, updated_at = {update_time} WHERE id = %s"
+        db.execute(sql, (document_id,))
+        logger.info(f"后台保存文档 {document_id} 成功")
+        return True
+    except Exception as e:
+        logger.error(f"内部更新文档失败，document_id={document_id}: {e}", exc_info=True)
+        raise
+
+
 # ==================== 文档锁定/解锁相关函数 ====================
 
 def lock_document(db, document_id: int, owner_id: int) -> bool:

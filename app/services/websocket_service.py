@@ -13,8 +13,7 @@ from fastapi import WebSocket
 from app.crdt import get_document_crdt
 from app.core.utils import get_utc_now
 from app.db.session import get_db_connection, close_connection_safely
-from app.services.document_service import update_document
-from app.schemas import DocumentUpdate
+from app.services.document_service import update_document_internal
 
 logger = logging.getLogger(__name__)
 
@@ -299,9 +298,8 @@ class ConnectionManager:
                             # 获取CRDT当前文本
                             doc_crdt = get_document_crdt(doc_id)
                             content = doc_crdt.master_crdt.to_text()
-                            # 使用服务层update_document进行参数化更新
-                            doc_update = DocumentUpdate(content=content)
-                            update_document(db, doc_id, doc_update, 0)
+                            # 使用内部更新函数（无权限检查）
+                            update_document_internal(db, doc_id, content)
                         finally:
                             if db:
                                 close_connection_safely(db)

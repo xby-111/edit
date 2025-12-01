@@ -1,12 +1,10 @@
 from datetime import datetime
-from typing import Dict, List, Set
 import asyncio
 import logging
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, Depends
-from jose import JWTError, jwt, ExpiredSignatureError, JWSError
+from jose import JWTError, jwt, ExpiredSignatureError
 from app.db.session import get_db_connection, close_connection_safely
-from app.services.document_service import get_document, update_document
 from app.services.websocket_service import ConnectionManager as ServiceConnectionManager
 
 from app.core.config import settings
@@ -18,165 +16,6 @@ HEARTBEAT_INTERVAL = 25  # 秒，心跳发送间隔
 HEARTBEAT_TIMEOUT = HEARTBEAT_INTERVAL * 3  # 75秒，超时时间为3倍心跳间隔
 
 router = APIRouter()
-
-
-class ConnectionManager:
-    def __init__(self) -> None:
-        self.rooms: Dict[int, Set[WebSocket]] = {}
-        self.usernames: Dict[WebSocket, str] = {}
-        self.user_ids: Dict[WebSocket, int] = {}  # 存储用户ID
-        self.connection_times: Dict[WebSocket, datetime] = {}  # 连接时间
-        self.db_connections: Dict[WebSocket, object] = {}  # 每个WebSocket的独立数据库连接
-        self.last_heartbeat: Dict[WebSocket, datetime] = {}  # 最后心跳时间
-
-    async def connect(self, document_id: int, websocket: WebSocket, username: str, user_id: int, db_conn) -> None:
-        # WebSocket 已在 endpoint 中接受，这里不再接受
-        if document_id not in self.rooms:
-            self.rooms[document_id] = set()
-        self.rooms[document_id].add(websocket)
-        self.usernames[websocket] = username
-        self.user_ids[websocket] = user_id
-        self.connection_times[websocket] = datetime.utcnow()
-        self.db_connections[websocket] = db_conn
-        self.last_heartbeat[websocket] = datetime.utcnow()
-        
-        logger.info(f"用户 {username}({user_id}) 连接到文档 {document_id}")
-        
-        await self.broadcast(
-            document_id,
-            {
-                "type": "presence",
-                "action": "join",
-                "doc_id": document_id,
-                "user": username,
-                "user_id": user_id,
-                "ts": datetime.utcnow().isoformat(),
-            },
-            sender=websocket,
-        )
-
-    async def disconnect(self, document_id: int, websocket: WebSocket) -> None:
-        if document_id in self.rooms:
-            self.rooms[document_id].discard(websocket)
-            username = self.usernames.pop(websocket, "")
-            user_id = self.user_ids.pop(websocket, None)
-            self.connection_times.pop(websocket, None)
-            db_conn = self.db_connections.pop(websocket, None)
-            self.last_heartbeat.pop(websocket, None)
-            
-            # 关闭该WebSocket的数据库连接
-            if db_conn:
-                close_connection_safely(db_conn)
-            
-            logger.info(f"用户 {username}({user_id}) 断开与文档 {document_id} 的连接")
-            
-            if self.rooms[document_id]:
-                # Broadcast leave to others
-                await self.broadcast(
-                    document_id,
-                    {
-                        "type": "presence",
-                        "action": "leave",
-                        "doc_id": document_id,
-                        "user": username,
-                        "user_id": user_id,
-                        "ts": datetime.utcnow().isoformat(),
-                    },
-                    sender=websocket,
-                )
-            else:
-                self.rooms.pop(document_id, None)
-
-    async def broadcast(self, document_id: int, message: dict, sender: WebSocket | None = None) -> None:
-        if document_id not in self.rooms:
-            return
-        
-        dead_connections = []
-        active_connections = 0
-        
-        for connection in list(self.rooms[document_id]):
-            if connection is sender:
-                continue
-                
-            try:
-                await connection.send_json(message)
-                active_connections += 1
-            except (RuntimeError, WebSocketDisconnect) as e:
-                # Connection might be closed or disconnected
-                logger.debug(f"发现死连接，移除: {e}")
-                dead_connections.append(connection)
-            except Exception as e:
-                # Any other exception also indicates a dead connection
-                logger.debug(f"发送消息时出现异常，移除连接: {e}")
-                dead_connections.append(connection)
-        
-        # Remove dead connections
-        for connection in dead_connections:
-            await self.disconnect(document_id, connection)
-        
-        logger.debug(f"广播完成，活跃连接数: {active_connections}")
-
-    def get_online_users(self, document_id: int) -> List[Dict]:
-        """获取在线用户列表，包含用户名和ID"""
-        if document_id not in self.rooms:
-            return []
-        return [
-            {
-                "username": self.usernames.get(ws, ""), 
-                "user_id": self.user_ids.get(ws, 0)
-            } 
-            for ws in self.rooms[document_id]
-        ]
-    
-    async def cleanup_dead_connections(self, document_id: int = None) -> None:
-        """清理死连接（使用应用层心跳）"""
-        rooms_to_check = [document_id] if document_id else list(self.rooms.keys())
-        current_time = datetime.utcnow()
-        
-        for doc_id in rooms_to_check:
-            if doc_id not in self.rooms:
-                continue
-                
-            dead_connections = []
-            for connection in list(self.rooms[doc_id]):
-                # 检查心跳超时（超时时间为心跳间隔的3倍，确保足够的容错性）
-                last_heartbeat = self.last_heartbeat.get(connection)
-                if not last_heartbeat or (current_time - last_heartbeat).seconds > HEARTBEAT_TIMEOUT:
-                    dead_connections.append(connection)
-                    continue
-                
-                # 尝试发送应用层心跳
-                try:
-                    await connection.send_json({"type": "ping", "ts": current_time.isoformat()})
-                except Exception:
-                    dead_connections.append(connection)
-            
-            # 清理死连接
-            for connection in dead_connections:
-                await self.disconnect(doc_id, connection)
-
-    async def handle_pong(self, websocket: WebSocket) -> None:
-        """处理心跳响应"""
-        self.last_heartbeat[websocket] = datetime.utcnow()
-        username = self.usernames.get(websocket, "未知用户")
-        logger.debug(f"收到来自 {username} 的心跳响应")
-
-    async def send_heartbeat_to_all(self) -> None:
-        """向所有活跃连接发送心跳"""
-        current_time = datetime.utcnow()
-        total_connections = sum(len(conns) for conns in self.rooms.values())
-        logger.debug(f"发送心跳到所有连接，当前总连接数: {total_connections}")
-        
-        for document_id, connections in list(self.rooms.items()):
-            for connection in list(connections):
-                try:
-                    await connection.send_json({
-                        "type": "ping", 
-                        "ts": current_time.isoformat()
-                    })
-                except Exception as e:
-                    logger.debug(f"发送心跳失败，将标记为死连接: {e}")
-                    # 下次清理任务会处理这个连接
 
 
 @router.websocket(f"{settings.API_V1_STR}/ws/test")
