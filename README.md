@@ -59,11 +59,13 @@ edit/
 │   ├── main.py                   # FastAPI 应用入口
 │   ├── crdt.py                   # CRDT 算法实现
 │   ├── api/
+│   │   ├── admin_deps.py         # 管理员依赖
 │   │   └── routers/              # API 路由
 │   │       ├── auth.py           # 认证相关
 │   │       ├── users.py          # 用户管理
 │   │       ├── documents.py      # 文档管理
 │   │       ├── ws.py             # WebSocket 协作
+│   │       ├── notify_ws.py      # 通知 WebSocket
 │   │       ├── admin.py          # 管理员功能
 │   │       ├── chat.py           # 文档聊天
 │   │       ├── notifications.py  # 通知系统
@@ -73,7 +75,7 @@ edit/
 │   │   ├── security.py           # 安全与认证
 │   │   └── utils.py              # 公共工具函数
 │   ├── db/
-│   │   ├── session.py            # 数据库连接
+│   │   ├── session.py            # 数据库连接 (OpenGauss 兼容层)
 │   │   ├── init_db.py            # 数据库初始化
 │   │   └── init_permissions.py   # 权限初始化
 │   ├── services/                 # 业务逻辑层
@@ -81,20 +83,32 @@ edit/
 │   │   ├── document_service.py
 │   │   ├── websocket_service.py  # WebSocket 服务 (CRDT + 写后持久化)
 │   │   ├── audit_service.py
-│   │   └── notification_service.py
+│   │   ├── notification_service.py
+│   │   ├── notification_ws_manager.py
+│   │   ├── chat_service.py
+│   │   ├── comment_service.py
+│   │   ├── task_service.py
+│   │   ├── oauth_service.py
+│   │   ├── totp_service.py
+│   │   ├── verification_service.py
+│   │   ├── backup_service.py
+│   │   ├── monitoring_service.py
+│   │   └── settings_service.py
 │   └── schemas/                  # Pydantic 数据模型
-├── models/                       # SQLAlchemy ORM 模型
-├── schemas/                      # 全局 Schema 定义
+│       ├── comment.py
+│       ├── task.py
+│       └── notification.py
 ├── static/
 │   ├── editor.js                 # 协作编辑器前端 (CRDT 客户端)
-│   └── client.js
+│   ├── client.js                 # API 客户端
+│   └── toast.js                  # 通知提示组件
 ├── templates/
 │   ├── index.html                # 主页面
-│   └── test_collab.html          # 协作测试页
+│   └── test_collab.html          # 协作编辑器页面
 ├── docs/                         # 项目文档
-│   ├── 项目技术概览与接口说明.md
-│   └── 数据库表结构.md
 ├── scripts/                      # 工具脚本
+├── uploads/                      # 上传文件目录
+├── backups/                      # 备份目录
 ├── requirements.txt              # Python 依赖
 └── README.md
 ```
@@ -286,4 +300,4 @@ MIT License
 ---
 
 **项目版本**: 1.1.0  
-**最后更新**: 2025年1月
+**最后更新**: 2025年11月

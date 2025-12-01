@@ -34,7 +34,7 @@ class ConnectionManager:
         self._dirty_lock = asyncio.Lock()
         self._background_task: Optional[asyncio.Task] = None
 
-    async def connect(self, websocket: WebSocket, document_id: int, user_id: int, initial_content: str):
+    async def connect(self, websocket: WebSocket, document_id: int, user_id: int, initial_content: str, username: str = ""):
         # 注意：WebSocket 应该在路由层已经 accept，这里不再重复 accept
         if document_id not in self.active_connections:
             self.active_connections[document_id] = []
@@ -47,10 +47,11 @@ class ConnectionManager:
         # 创建客户端 CRDT
         client_crdt = doc_crdt.get_client(f"user_{user_id}")
 
-        # 存储连接信息
+        # 存储连接信息（包含 username）
         self.active_connections[document_id].append({
             "websocket": websocket,
             "user_id": user_id,
+            "username": username,
             "client_id": f"user_{user_id}",
             "crdt": client_crdt,
         })
@@ -110,11 +111,15 @@ class ConnectionManager:
 
     async def broadcast_to_room(self, document_id: int, data: dict, sender_user_id: int, sender_ws: WebSocket):
         if document_id not in self.active_connections:
+            logger.debug(f"房间 {document_id} 不存在，跳过广播")
             return
+        conn_count = len(self.active_connections[document_id])
+        logger.info(f"广播到房间 {document_id}，共 {conn_count} 个连接，发送者 user_id={sender_user_id}")
         for conn in self.active_connections[document_id]:
             if conn["websocket"] != sender_ws:
                 try:
                     await conn["websocket"].send_json(data)
+                    logger.debug(f"已发送给 user_id={conn['user_id']}")
                 except:
                     # 如果发送失败，移除连接
                     await self._safe_remove_connection(conn["websocket"], document_id)
@@ -122,6 +127,15 @@ class ConnectionManager:
     def get_user_color(self, user_id: int) -> str:
         """获取用户的固定颜色（根据用户ID取模）"""
         return USER_COLORS[user_id % len(USER_COLORS)]
+
+    def _get_username_by_user_id(self, document_id: int, user_id: int) -> str:
+        """根据 user_id 获取用户名"""
+        if document_id not in self.active_connections:
+            return ""
+        for conn in self.active_connections[document_id]:
+            if conn.get("user_id") == user_id:
+                return conn.get("username", "")
+        return ""
 
     async def handle_pong(self, websocket: WebSocket) -> None:
         """更新心跳时间戳（兼容 ws.py 的调用）"""
@@ -166,18 +180,23 @@ class ConnectionManager:
             payload = data.get("payload", {})
             content = payload.get("html") or data.get("content", "")
         elif msg_type == "cursor":
-            # 广播光标位置给其他用户
+            # 广播光标位置给其他用户（包含 username）
+            username = self._get_username_by_user_id(document_id, user_id)
             await self.broadcast_to_room(document_id, {
                 "type": "cursor",
                 "user_id": user_id,
+                "username": username,
                 "cursor": data.get("cursor"),
                 "color": self.get_user_color(user_id)
             }, user_id, sender_ws)
             return
         elif msg_type == "selection":
             # 广播选区信息给其他用户
+            username = self._get_username_by_user_id(document_id, user_id)
             await self.broadcast_to_room(document_id, {
                 "type": "selection",
+                "user_id": user_id,
+                "username": username,
                 "user_id": user_id,
                 "selection": data.get("selection"),
                 "color": self.get_user_color(user_id)
@@ -206,6 +225,7 @@ class ConnectionManager:
             else:
                 broadcast_data["content"] = content
 
+            logger.info(f"广播内容更新: doc_id={document_id}, user_id={user_id}, type={msg_type}")
             await self.broadcast_to_room(document_id, broadcast_data, user_id, sender_ws)
     
     async def _handle_crdt_ops(self, document_id: int, user_id: int, data: dict, sender_ws: WebSocket, db):
@@ -240,7 +260,7 @@ class ConnectionManager:
         })
     
     def get_online_users(self, document_id: int) -> List[Dict[str, Any]]:
-        """获取文档的在线用户列表"""
+        """获取文档的在线用户列表（包含 username）"""
         if document_id not in self.active_connections:
             return []
         
@@ -248,6 +268,7 @@ class ConnectionManager:
         for conn in self.active_connections[document_id]:
             users.append({
                 "user_id": conn["user_id"],
+                "username": conn.get("username", ""),
                 "color": self.get_user_color(conn["user_id"]),
             })
         return users

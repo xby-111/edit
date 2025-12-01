@@ -209,7 +209,7 @@ class ApiClient {
             throw new Error(`无效的导出格式: ${formatStr}。支持的格式: ${validFormats.join(', ')}`);
         }
 
-        const response = await fetch(`${this.baseURL}/api/v1/documents/${id}/export? format=${formatStr}`, {
+        const response = await fetch(`${this.baseURL}/api/v1/documents/${id}/export?format=${formatStr}`, {
             method: 'GET',
             headers: {
                 'Authorization': `Bearer ${this.token}`

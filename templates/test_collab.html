@@ -54,6 +54,11 @@
             flex: 1;
             border: none !important;
             font-size: 16px;
+            position: relative;
+        }
+        
+        .ql-editor {
+            position: relative;
         }
         
         .ql-toolbar {
@@ -122,13 +127,18 @@
             position: absolute;
             top: -22px;
             left: -2px;
-            background-color: #FF5733;
             color: white;
             padding: 2px 6px;
             border-radius: 3px;
             font-size: 12px;
             white-space: nowrap;
             opacity: 0.8;
+        }
+        
+        .remote-selection {
+            position: absolute;
+            pointer-events: none;
+            z-index: 5;
         }
         
         /* Status Indicator */
@@ -222,8 +232,9 @@
         <div class="main-area">
             <div class="editor-wrapper">
                 <!-- Quill Toolbar will be inserted here by Quill -->
-                <div id="editor"></div>
-                <!-- Cursor Layer -->
+                <div id="editor">
+                    <!-- Cursor Layer will be moved inside .ql-editor by JS -->
+                </div>
                 <div id="cursor-layer"></div>
             </div>
             
@@ -332,6 +343,27 @@
     <script src="/static/editor.js"></script>
     
     <script>
+        // 更新在线用户列表的全局函数
+        function updateOnlineUsersList(users) {
+            const list = document.getElementById('online-users-list');
+            if (!list) return;
+            
+            if (!users || users.length === 0) {
+                list.innerHTML = '<div class="text-center text-muted small py-2">暂无其他用户在线</div>';
+                return;
+            }
+            
+            list.innerHTML = users.map(u => `
+                <div class="d-flex align-items-center mb-2 p-2 bg-light rounded">
+                    <span class="me-2" style="width: 10px; height: 10px; border-radius: 50%; background-color: ${u.color || '#28a745'}; display: inline-block;"></span>
+                    <span class="small fw-bold">${u.username || '用户' + u.user_id}</span>
+                </div>
+            `).join('');
+        }
+        
+        // 暴露到全局
+        window.updateOnlineUsersList = updateOnlineUsersList;
+        
         // Initialize
         document.addEventListener('DOMContentLoaded', async function() {
             // Parse URL params
@@ -361,6 +393,13 @@
                     toolbar: toolbarOptions
                 }
             });
+            
+            // 将光标层移动到 .ql-editor 内部，以便正确定位
+            const qlEditor = document.querySelector('.ql-editor');
+            const cursorLayer = document.getElementById('cursor-layer');
+            if (qlEditor && cursorLayer) {
+                qlEditor.appendChild(cursorLayer);
+            }
 
             // Initialize Editor Logic (WebSocket, CRDT, etc.)
             if (window.initEditor) {
@@ -508,10 +547,10 @@
                 list.innerHTML = tasks.map(t => `
                     <div class="task-item">
                         <div class="flex-grow-1">
-                            <div class="fw-bold small ${t.status === 'DONE' ? 'task-done' : ''}">${t.title}</div>
+                            <div class="fw-bold small ${t.status === 'done' ? 'task-done' : ''}">${t.title}</div>
                             ${t.due_at ? `<div class="text-muted" style="font-size: 10px;">截止: ${new Date(t.due_at).toLocaleDateString()}</div>` : ''}
                         </div>
-                        ${t.status !== 'DONE' ? `
+                        ${t.status !== 'done' ? `
                             <button class="btn btn-outline-success btn-sm py-0 px-1" onclick="completeTask(${t.id}, ${docId})">
                                 <i class="bi bi-check"></i>
                             </button>
@@ -525,9 +564,9 @@
         
         async function completeTask(taskId, docId) {
             try {
-                await api.request(`/tasks/${taskId}`, {
-                    method: 'PATCH',
-                    body: JSON.stringify({ status: 'DONE' })
+                await api.request(`/documents/${docId}/tasks/${taskId}`, {
+                    method: 'PUT',
+                    body: JSON.stringify({ status: 'done' })
                 });
                 loadTasks(docId);
                 Toast.success('任务已完成');

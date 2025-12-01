@@ -179,7 +179,7 @@ class ConnectionManager:
                     # 下次清理任务会处理这个连接
 
 
-@router.websocket("/ws/test")
+@router.websocket(f"{settings.API_V1_STR}/ws/test")
 async def test_websocket(websocket: WebSocket):
     """简单的测试WebSocket端点"""
     logger.info("测试WebSocket连接请求")
@@ -204,7 +204,7 @@ def decode_username_from_token(token: str) -> str:
         raise exc
 
 
-@router.websocket("/ws/documents/{document_id}")
+@router.websocket(f"{settings.API_V1_STR}/ws/documents/{{document_id}}")
 async def document_collab_ws(
     websocket: WebSocket,
     document_id: int,
@@ -308,7 +308,7 @@ async def document_collab_ws(
             return
 
         initial_content = doc.get("content") if doc else ""
-        await manager.connect(websocket, document_id, user_id, initial_content)
+        await manager.connect(websocket, document_id, user_id, initial_content, username=token_username)
 
         # 发送初始化存在信息（在线用户与权限）
         await websocket.send_json({
@@ -341,7 +341,7 @@ async def document_collab_ws(
             "type": "presence",
             "action": "init",
             "doc_id": document_id,
-            "online_users": [user["username"] for user in manager.get_online_users(document_id)],
+            "online_users": [u.get("username", "") for u in manager.get_online_users(document_id)],
             "online_users_info": manager.get_online_users(document_id),
             "ts": datetime.utcnow().isoformat(),
         }
@@ -375,13 +375,15 @@ async def document_collab_ws(
                 logger.warning(f"收到无效消息（缺少type字段）: {message}")
                 continue
 
-            # 只处理已知消息类型
-            if msg_type not in {"content_update", "cursor", "presence"}:
+            # 已知消息类型白名单（包含 CRDT 增量同步）
+            known_types = {"content_update", "content", "cursor", "selection", "presence", "crdt_ops"}
+            if msg_type not in known_types:
                 logger.warning(f"收到未知消息类型: {msg_type}")
                 continue
 
-            # 健壮性检查：确保payload存在
-            if payload is None:
+            # payload 检查：cursor/selection 可能直接在 message 中，不强制要求 payload
+            # crdt_ops 使用 ops 字段，也不需要 payload
+            if msg_type in {"content_update", "content"} and payload is None:
                 logger.warning(f"收到{msg_type}消息但缺少payload")
                 continue
 
@@ -414,6 +416,7 @@ async def document_collab_ws(
                         continue
 
                 # 委托给 service 层来处理（CRDT、广播、标记脏数据等）
+                logger.info(f"处理消息: type={msg_type}, user_id={user_id}, doc_id={document_id}")
                 await manager.handle_message(document_id, user_id, message, websocket, db)
             except Exception as e:
                 logger.error(f"处理{msg_type}消息时出错: {e}")

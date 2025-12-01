@@ -1,15 +1,14 @@
 """
-初始化默认权限和角色权限
+初始化默认权限和角色权限 - 使用原生 SQL 操作
 """
 import logging
-from app.db.session import SessionLocal
-from models import Permission, RolePermission
+from app.db.session import get_global_connection
 
 logger = logging.getLogger(__name__)
 
 def init_permissions():
     """初始化默认权限"""
-    db = SessionLocal()
+    conn = get_global_connection()
     try:
         # 定义默认权限
         default_permissions = [
@@ -24,18 +23,25 @@ def init_permissions():
             {"name": "view_logs", "description": "查看日志", "resource_type": "system"},
         ]
         
-        # 创建权限
+        # 创建权限（使用原生 SQL）
         for perm_data in default_permissions:
-            existing = db.query(Permission).filter(Permission.name == perm_data["name"]).first()
+            # 检查权限是否已存在
+            existing = conn.query(
+                "SELECT id FROM permissions WHERE name = %s LIMIT 1",
+                (perm_data["name"],)
+            )
             if not existing:
-                permission = Permission(**perm_data)
-                db.add(permission)
-        
-        db.commit()
+                conn.execute(
+                    """
+                    INSERT INTO permissions (name, description, resource_type) 
+                    VALUES (%s, %s, %s)
+                    """,
+                    (perm_data["name"], perm_data["description"], perm_data["resource_type"])
+                )
         
         # 获取所有权限ID
-        all_permissions = db.query(Permission).all()
-        perm_dict = {p.name: p.id for p in all_permissions}
+        all_permissions = conn.query("SELECT id, name FROM permissions", ())
+        perm_dict = {row[1]: row[0] for row in all_permissions}
         
         # 为角色分配权限
         role_permissions = {
@@ -47,25 +53,24 @@ def init_permissions():
         for role, perm_names in role_permissions.items():
             for perm_name in perm_names:
                 if perm_name in perm_dict:
-                    existing = db.query(RolePermission).filter(
-                        RolePermission.role == role,
-                        RolePermission.permission_id == perm_dict[perm_name]
-                    ).first()
+                    # 检查角色权限是否已存在
+                    existing = conn.query(
+                        "SELECT id FROM role_permissions WHERE role = %s AND permission_id = %s LIMIT 1",
+                        (role, perm_dict[perm_name])
+                    )
                     if not existing:
-                        role_perm = RolePermission(
-                            role=role,
-                            permission_id=perm_dict[perm_name]
+                        conn.execute(
+                            """
+                            INSERT INTO role_permissions (role, permission_id) 
+                            VALUES (%s, %s)
+                            """,
+                            (role, perm_dict[perm_name])
                         )
-                        db.add(role_perm)
         
-        db.commit()
         logger.info("权限初始化完成")
     except Exception as e:
-        db.rollback()
         logger.error(f"权限初始化失败: {e}", exc_info=True)
         raise  # 权限初始化失败应该抛出异常，让调用方决定如何处理
-    finally:
-        db.close()
 
 if __name__ == "__main__":
     import logging

@@ -92,7 +92,8 @@ def _create_schema(conn):
             range_end INTEGER NULL,
             parent_id INTEGER NULL,
             mentions TEXT NULL,
-            created_at TIMESTAMP DEFAULT NOW()
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
         )
     """)
     conn.execute("""
@@ -271,6 +272,155 @@ def _create_schema(conn):
     """)
     conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_notifications_user_type ON notifications (user_id, type, created_at DESC)
+    """)
+
+    # Audit logs table (审计日志表)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS audit_logs (
+            id BIGSERIAL PRIMARY KEY,
+            user_id BIGINT NULL,
+            action VARCHAR(100) NOT NULL,
+            resource_type VARCHAR(50) NULL,
+            resource_id BIGINT NULL,
+            ip VARCHAR(50) NULL,
+            user_agent VARCHAR(500) NULL,
+            meta_json TEXT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT now()
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_audit_logs_user_time ON audit_logs (user_id, created_at DESC)
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs (action)
+    """)
+
+    # System settings table (系统设置表)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS system_settings (
+            id SERIAL PRIMARY KEY,
+            key VARCHAR(200) UNIQUE NOT NULL,
+            value TEXT NOT NULL,
+            updated_at TIMESTAMP NOT NULL DEFAULT now()
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_system_settings_key ON system_settings (key)
+    """)
+
+    # User feedback table (用户反馈表)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS user_feedback (
+            id BIGSERIAL PRIMARY KEY,
+            user_id BIGINT NULL,
+            rating INT NOT NULL CHECK (rating >= 1 AND rating <= 5),
+            content TEXT NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT now()
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_user_feedback_created ON user_feedback (created_at DESC)
+    """)
+
+    # Document collaborators table (文档协作者表)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS document_collaborators (
+            id BIGSERIAL PRIMARY KEY,
+            document_id BIGINT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            role VARCHAR(20) NOT NULL DEFAULT 'viewer',
+            created_at TIMESTAMP NOT NULL DEFAULT now(),
+            CONSTRAINT uq_doc_collab UNIQUE (document_id, user_id),
+            CONSTRAINT ck_doc_collab_role CHECK (role IN ('viewer', 'editor'))
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_doc_collab_document ON document_collaborators (document_id)
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_doc_collab_user ON document_collaborators (user_id)
+    """)
+
+    # Verification codes table (验证码表)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS verification_codes (
+            id BIGSERIAL PRIMARY KEY,
+            user_id BIGINT NULL,
+            email VARCHAR(255) NULL,
+            phone VARCHAR(32) NULL,
+            code_hash VARCHAR(64) NOT NULL,
+            code_type VARCHAR(32) NOT NULL,
+            expires_at TIMESTAMP NOT NULL,
+            attempts INT NOT NULL DEFAULT 0,
+            created_at TIMESTAMP NOT NULL DEFAULT now()
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_verification_codes_email ON verification_codes (email, code_type)
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_verification_codes_phone ON verification_codes (phone, code_type)
+    """)
+
+    # OAuth accounts table (OAuth 账户表)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS oauth_accounts (
+            id BIGSERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            provider VARCHAR(32) NOT NULL,
+            provider_user_id VARCHAR(255) NOT NULL,
+            access_token TEXT NULL,
+            refresh_token TEXT NULL,
+            expires_at TIMESTAMP NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT now(),
+            updated_at TIMESTAMP NOT NULL DEFAULT now(),
+            CONSTRAINT uq_oauth_provider_user UNIQUE (provider, provider_user_id)
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_oauth_accounts_user_id ON oauth_accounts (user_id)
+    """)
+
+    # TOTP secrets table (双因素认证密钥表)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS totp_secrets (
+            id BIGSERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+            secret VARCHAR(64) NOT NULL,
+            is_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+            backup_codes TEXT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT now(),
+            updated_at TIMESTAMP NOT NULL DEFAULT now()
+        )
+    """)
+
+    # Chat messages table (聊天消息表)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id BIGSERIAL PRIMARY KEY,
+            document_id BIGINT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            content TEXT NOT NULL,
+            message_type VARCHAR(16) NOT NULL DEFAULT 'text',
+            created_at TIMESTAMP NOT NULL DEFAULT now()
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_document ON chat_messages (document_id, created_at DESC)
+    """)
+
+    # System metrics table (系统指标表)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS system_metrics (
+            id BIGSERIAL PRIMARY KEY,
+            metric_name VARCHAR(64) NOT NULL,
+            metric_value DOUBLE PRECISION NOT NULL,
+            tags TEXT NULL,
+            recorded_at TIMESTAMP NOT NULL DEFAULT now()
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_system_metrics_name_time ON system_metrics (metric_name, recorded_at DESC)
     """)
 
     # 插入默认模板

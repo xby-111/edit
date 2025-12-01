@@ -1109,7 +1109,13 @@ async def update_task_endpoint(
         raise HTTPException(status_code=403, detail="无编辑权限")
     
     try:
-        updated_task = update_task(db, task_id, task_update, current_user.id)
+        updated_task = update_task(
+            db, 
+            task_id, 
+            status=task_update.status,
+            due_at=None,  # TaskUpdate 中没有 due_at 字段，如有需要可扩展
+            assignee_id=task_update.assigned_to
+        )
         if not updated_task:
             raise HTTPException(status_code=404, detail="任务不存在")
         
