@@ -440,80 +440,120 @@ function connect(doc_id, token) {
             // 设置标志：正在接收远程更新
             isReceivingRemoteUpdate = true;
             
-            // 检查是否存在本地草稿
+            // 🎯 Smart Draft Recovery Logic
             const draftKey = `draft_${doc_id}`;
             const draftDataStr = localStorage.getItem(draftKey);
+            
+            let shouldPromptUser = false;
+            let draftContent = "";
+            let draftTimestamp = 0;
             
             if (draftDataStr) {
                 try {
                     const draftData = JSON.parse(draftDataStr);
-                    const draftContent = draftData.content || "";
-                    const draftTimestamp = draftData.timestamp || 0;
+                    draftContent = draftData.content || "";
+                    draftTimestamp = draftData.timestamp || 0;
                     
                     // 计算草稿年龄（毫秒）
                     const draftAge = Date.now() - draftTimestamp;
                     const ONE_HOUR = 60 * 60 * 1000;
                     
-                    // 如果草稿超过1小时，自动清除
+                    // 🧹 Silent Cleanup Scenarios (The "Happy Path")
                     if (draftAge > ONE_HOUR) {
-                        console.log('草稿已过期（超过1小时），自动清除');
+                        // Scenario 1: 草稿过期
+                        console.log('🧹 草稿已过期（>1小时），静默清理');
                         localStorage.removeItem(draftKey);
-                    }
-                    // 如果草稿内容和服务器内容相同，清除草稿
-                    else if (draftContent === serverContent) {
-                        console.log('草稿内容与服务器相同，清除草稿');
+                    } else if (!draftContent || draftContent.trim() === '' || draftContent === '<p><br></p>') {
+                        // Scenario 2: 草稿为空
+                        console.log('🧹 草稿为空，静默清理');
                         localStorage.removeItem(draftKey);
-                    }
-                    // 只有当草稿不为空、与服务器不同、且在1小时内才提示
-                    else if (draftContent && draftContent !== serverContent) {
-                        const confirmMessage = `检测到本地存在未同步的草稿 (保存于 ${new Date(draftTimestamp).toLocaleString()})。\n\n` +
-                            `是否使用本地草稿？\n` +
-                            `- 点击"确定"使用本地草稿\n` +
-                            `- 点击"取消"使用服务器内容`;
-                        
-                        let useDraft = false;
-                        if (typeof Toast !== 'undefined' && Toast.confirm) {
-                            useDraft = await Toast.confirm(confirmMessage, { confirmText: '使用草稿', cancelText: '使用服务器内容' });
-                        }
-                        
-                        // 无论选择什么，都清除草稿
+                    } else if (draftContent === serverContent) {
+                        // Scenario 3: 草稿与服务器内容完全一致（最常见的场景）
+                        console.log('✅ 本地草稿与服务器内容一致，静默清理冗余备份');
                         localStorage.removeItem(draftKey);
-                        
-                        if (useDraft) {
-                            // 使用本地草稿
-                            if (window.quillEditor) {
-                                window.quillEditor.setContents(
-                                    window.quillEditor.clipboard.convert(draftContent), 
-                                    'silent'
-                                );
-                            } else {
-                                const editor = document.getElementById("editor");
-                                if (editor) editor.value = draftContent;
-                            }
-                            localContent = draftContent;
-                            console.log('已恢复本地草稿');
-                            
-                            // 重置标志并立即同步给其他用户
-                            isReceivingRemoteUpdate = false;
-                            
-                            // 强制立即发送内容更新（不用防抖）
-                            if (ws && ws.readyState === WebSocket.OPEN) {
-                                ws.send(JSON.stringify({
-                                    type: "content_update",
-                                    payload: { html: draftContent }
-                                }));
-                                console.log('已同步本地草稿到其他用户');
-                            }
-                            return;
-                        }
+                    } else {
+                        // ⚠️ Conflict Detected: 草稿与服务器内容不同
+                        shouldPromptUser = true;
                     }
                 } catch (e) {
-                    console.error('解析本地草稿失败:', e);
+                    console.error('⚠️ 解析本地草稿失败:', e);
+                    // 错误时保留草稿，不删除（避免数据丢失）
+                }
+            }
+            
+            // 🚨 Conflict Handling (The "Rescue Path")
+            if (shouldPromptUser) {
+                const confirmMessage = `⚠️ 检测到本地存在未同步的草稿\n` +
+                    `保存时间: ${new Date(draftTimestamp).toLocaleString()}\n` +
+                    `草稿大小: ${Math.round(draftContent.length / 1024)}KB\n` +
+                    `服务器内容: ${Math.round(serverContent.length / 1024)}KB\n\n` +
+                    `是否使用本地草稿？`;
+                
+                let useDraft = false;
+                if (typeof Toast !== 'undefined' && Toast.confirm) {
+                    useDraft = await Toast.confirm(confirmMessage, { 
+                        confirmText: '✅ 使用草稿', 
+                        cancelText: '❌ 使用服务器内容' 
+                    });
+                } else {
+                    useDraft = confirm(confirmMessage);
+                }
+                
+                if (useDraft) {
+                    // 用户选择草稿：应用 → 同步 → 删除
+                    console.log('📝 用户选择使用本地草稿，开始恢复流程...');
+                    
+                    try {
+                        // Step 1: 应用草稿到编辑器
+                        if (window.quillEditor) {
+                            window.quillEditor.setContents(
+                                window.quillEditor.clipboard.convert(draftContent), 
+                                'silent'
+                            );
+                        } else {
+                            const editor = document.getElementById("editor");
+                            if (editor) editor.value = draftContent;
+                        }
+                        localContent = draftContent;
+                        console.log('✅ 步骤1: 草稿已应用到编辑器');
+                        
+                        // Step 2: 立即同步到服务器
+                        isReceivingRemoteUpdate = false;
+                        
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify({
+                                type: "content_update",
+                                payload: { html: draftContent }
+                            }));
+                            console.log('✅ 步骤2: 草稿内容已同步到服务器');
+                            
+                            // Step 3: 同步成功后才删除草稿
+                            setTimeout(() => {
+                                localStorage.removeItem(draftKey);
+                                console.log('✅ 步骤3: 草稿已安全删除');
+                            }, 500);
+                        } else {
+                            console.warn('⚠️ WebSocket 未连接，草稿保留，将在下次连接时重试');
+                        }
+                        
+                        setTimeout(() => {
+                            isReceivingRemoteUpdate = false;
+                        }, 200);
+                        
+                        // 早期返回，跳过后面的服务器内容加载
+                        return;
+                    } catch (err) {
+                        console.error('❌ 恢复草稿失败:', err);
+                        // 失败时不删除草稿，保留数据
+                    }
+                } else {
+                    // 用户选择服务器内容：清理草稿
+                    console.log('🗑️ 用户选择服务器内容，清理草稿');
                     localStorage.removeItem(draftKey);
                 }
             }
             
-            // 使用服务器内容
+            // 📥 Load Server Content (Default Path)
             if (window.quillEditor) {
                 window.quillEditor.setContents(
                     window.quillEditor.clipboard.convert(serverContent), 
@@ -665,14 +705,10 @@ function connect(doc_id, token) {
 }
 
 function setupEditor() {
-    // 自动保存功能 - 仅在连接断开时保存本地草稿，作为离线备份
+    // 🔥 修复 Issue A: 自动保存功能 - 始终保存到 localStorage 作为热备份
+    // 这是针对服务器崩溃、网络中断、浏览器崩溃的最后一道防线
     window.autoSave = function() {
         if (!documentId) return;
-        
-        // 如果 WebSocket 连接正常，不需要保存本地草稿（内容已通过 WebSocket 同步）
-        if (ws && ws.readyState === WebSocket.OPEN) {
-            return;
-        }
         
         const currentContent = window.getCurrentContent ? window.getCurrentContent() : 
             (window.quillEditor ? window.quillEditor.root.innerHTML : 
@@ -681,23 +717,34 @@ function setupEditor() {
         // 内容没有变化则不保存
         if (currentContent === localContent) return;
         
-        // 防抖：避免频繁保存本地草稿
+        // 防抖：避免频繁保存本地草稿 (降低到 500ms 以提高备份频率)
         clearTimeout(autoSaveTimer);
         autoSaveTimer = setTimeout(() => {
             saveLocalDraft(documentId, currentContent);
             lastSaveTime = Date.now();
-            console.log('连接断开，已保存本地草稿');
-        }, 1000);
+            
+            // 根据连接状态提供不同的日志信息
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                console.log('💾 热备份已保存 (在线状态)');
+            } else {
+                console.log('💾 离线备份已保存 (断线状态)');
+            }
+        }, 500); // 从 1000ms 降低到 500ms
     };
     
     // 页面关闭或刷新前保存草稿（仅当连接断开时）
+    let beforeUnloadSaved = false; // 防止重复保存标志
     window.addEventListener('beforeunload', function() {
+        // 🔥 修复: 避免与 onclose 重复保存
+        if (beforeUnloadSaved) return;
+        
         if (ws && ws.readyState !== WebSocket.OPEN && documentId) {
             const currentContent = window.quillEditor ? 
                 window.quillEditor.root.innerHTML : 
                 (document.getElementById("editor")?.value || "");
             if (currentContent && currentContent !== localContent) {
                 saveLocalDraft(documentId, currentContent);
+                beforeUnloadSaved = true;
             }
         }
     });
@@ -767,12 +814,19 @@ function setupEditor() {
 
 // 保存本地草稿
 function saveLocalDraft(documentId, content) {
+    // 🔥 关键修复: 拒绝保存空内容或无效内容
+    if (!content || content.trim() === '' || content === '<p><br></p>') {
+        console.warn('⚠️ 拒绝保存空草稿，跳过');
+        return;
+    }
+    
     const draftKey = `draft_${documentId}`;
     const draftData = {
         content: content,
         timestamp: Date.now()
     };
     localStorage.setItem(draftKey, JSON.stringify(draftData));
+    console.log(`💾 已保存草稿 (${Math.round(content.length / 1024)}KB)`);
 }
 
 // 光标绘制功能
@@ -791,7 +845,13 @@ function drawCursor(user_id, username, cursorData, color = "#FF5733") {
         cursor = document.createElement("div");
         cursor.id = `cursor-${user_id}`;
         cursor.className = "remote-cursor";
-        cursor.innerHTML = `<div class="cursor-label" style="background-color:${color};">${username}</div>`;
+        
+        // 🔒 安全修复: 使用 textContent 防止 XSS 攻击
+        const label = document.createElement("div");
+        label.className = "cursor-label";
+        label.style.backgroundColor = color;
+        label.textContent = username; // 安全地设置文本，不解析 HTML
+        cursor.appendChild(label);
         
         const cursorLayer = document.getElementById("cursor-layer");
         if (cursorLayer) cursorLayer.appendChild(cursor);

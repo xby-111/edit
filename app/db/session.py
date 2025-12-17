@@ -272,6 +272,20 @@ class OpenGaussCompat:
             # 无参数时直接执行
             return self.raw(sql)
 
+    def commit(self):
+        """显式提交事务"""
+        if hasattr(self.raw, "commit"):
+            return self.raw.commit()
+        # 如果原生驱动没有 commit 方法，使用 prepare 执行 SQL
+        return self.raw.prepare("COMMIT")()
+
+    def rollback(self):
+        """显式回滚事务"""
+        if hasattr(self.raw, "rollback"):
+            return self.raw.rollback()
+        # 如果原生驱动没有 rollback 方法，使用 prepare 执行 SQL
+        return self.raw.prepare("ROLLBACK")()
+
     def __getattr__(self, name):
         # 代理未覆盖的方法（commit/close/transaction 等）
         return getattr(self.raw, name)

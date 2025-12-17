@@ -820,10 +820,18 @@ def update_document_internal(db, document_id: int, content: str) -> bool:
         update_time = _format_datetime(datetime.utcnow())
         sql = f"UPDATE {TABLE_DOCUMENTS} SET content = {escaped_content}, updated_at = {update_time} WHERE id = %s"
         db.execute(sql, (document_id,))
-        logger.info(f"后台保存文档 {document_id} 成功")
+        
+        # 🔥 关键修复: 立即提交事务,确保数据持久化
+        db.commit()
+        logger.info(f"✅ 后台保存文档 {document_id} 成功并已提交")
         return True
     except Exception as e:
-        logger.error(f"内部更新文档失败，document_id={document_id}: {e}", exc_info=True)
+        logger.error(f"❌ 内部更新文档失败，document_id={document_id}: {e}", exc_info=True)
+        # 回滚事务
+        try:
+            db.rollback()
+        except:
+            pass
         raise
 
 

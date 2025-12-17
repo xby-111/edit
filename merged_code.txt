@@ -1,0 +1,2479 @@
+﻿# 浠ｇ爜姹囨€绘枃浠?
+
+
+
+文件: client.js
+路径: D:\Projects\edit\static\client.js
+内容:
+// API 客户端 - 处理用户认证和文档管理
+class ApiClient {
+    constructor() {
+        this.baseURL = '';
+        this.token = localStorage.getItem('access_token') || '';
+        this.username = localStorage.getItem('username') || '';
+    }
+
+    // 设置认证 token
+    setToken(token, username, userId) {
+        this.token = token;
+        this.username = username;
+        localStorage.setItem('access_token', token);
+        localStorage.setItem('username', username);
+        if (userId) {
+            localStorage.setItem('user_id', userId);
+        }
+    }
+
+    // 清除认证信息
+    clearAuth() {
+        this.token = '';
+        this.username = '';
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('username');
+        localStorage.removeItem('user_id');
+    }
+
+    // 通用请求方法
+    async request(endpoint, options = {}) {
+        const url = `${this.baseURL}/api/v1${endpoint}`;
+        const config = {
+            headers: {
+                'Content-Type': 'application/json',
+                ... options.headers
+            },
+            ... options
+        };
+
+        // 如果有 token，添加到请求头
+        if (this.token) {
+            config.headers.Authorization = `Bearer ${this.token}`;
+        }
+
+        try {
+            const response = await fetch(url, config);
+            const data = await response.json();
+
+            if (!response.ok) {
+                // 如果是认证错误，清除本地 token
+                if (response.status === 401) {
+                    this.clearAuth();
+                    showLoginForm();
+                    throw new Error('登录已过期，请重新登录');
+                }
+                throw new Error(data.detail || '请求失败');
+            }
+
+            return data;
+        } catch (error) {
+            console.error('API 请求错误:', error);
+            throw error;
+        }
+    }
+
+    // 用户注册
+    async register(username, email, password) {
+        return this.request('/auth/register', {
+            method: 'POST',
+            body: JSON.stringify({ username, email, password })
+        });
+    }
+
+    // 用户登录
+    async login(username, password) {
+        const formData = new FormData();
+        formData.append('username', username);
+        formData.append('password', password);
+
+        const response = await fetch(`${this.baseURL}/api/v1/auth/token`, {
+            method: 'POST',
+            body: formData
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || '登录失败');
+        }
+
+        const data = await response.json();
+        // 传递 user_id 到 setToken 方法，假设后端返回 user_id 字段
+        this.setToken(data.access_token, username, data.user_id);
+        return data;
+    }
+
+    // 获取当前用户信息
+    async getCurrentUser() {
+        return this.request('/auth/me');
+    }
+
+    // 获取文档列表
+    async getDocuments() {
+        return this.request('/documents');
+    }
+
+    // 获取共享文档列表
+    async getSharedDocuments() {
+        return this.request('/documents/shared');
+    }
+
+    // 创建文档
+    async createDocument(title, content = '', status = 'active') {
+        return this.request('/documents', {
+            method: 'POST',
+            body: JSON.stringify({ title, content, status })
+        });
+    }
+
+    // 获取单个文档
+    async getDocument(id) {
+        return this.request(`/documents/${id}`);
+    }
+
+    // 更新文档
+    async updateDocument(id, data) {
+        return this.request(`/documents/${id}`, {
+            method: 'PUT',
+            body: JSON.stringify(data)
+        });
+    }
+
+    // 删除文档
+    async deleteDocument(id) {
+        return this.request(`/documents/${id}`, {
+            method: 'DELETE'
+        });
+    }
+
+    // 获取模板列表
+    async getTemplates(category = null) {
+        const url = category ? `/templates?category=${category}` : '/templates';
+        return this.request(url);
+    }
+
+    // 获取单个模板
+    async getTemplate(id) {
+        return this.request(`/templates/${id}`);
+    }
+
+    // 创建模板
+    async createTemplate(template) {
+        return this.request('/templates', {
+            method: 'POST',
+            body: JSON.stringify(template)
+        });
+    }
+
+    // 更新模板
+    async updateTemplate(id, template) {
+        return this.request(`/templates/${id}`, {
+            method: 'PUT',
+            body: JSON.stringify(template)
+        });
+    }
+
+    // 删除模板
+    async deleteTemplate(id) {
+        return this.request(`/templates/${id}`, {
+            method: 'DELETE'
+        });
+    }
+
+    // 搜索文档
+    async searchDocuments(params) {
+        const queryString = new URLSearchParams(params).toString();
+        return this.request(`/documents/search?${queryString}`);
+    }
+
+    // 获取文件夹列表
+    async getFolders() {
+        return this.request('/folders');
+    }
+
+    // 获取标签列表
+    async getTags() {
+        return this.request('/tags');
+    }
+
+    // 锁定文档
+    async lockDocument(id) {
+        return this.request(`/documents/${id}/lock`, {
+            method: 'POST'
+        });
+    }
+
+    // 解锁文档
+    async unlockDocument(id) {
+        return this.request(`/documents/${id}/unlock`, {
+            method: 'POST'
+        });
+    }
+
+    // 导出文档
+    async exportDocument(id, format = 'html') {
+        // 确保 format 是字符串，防止传入 Promise
+        const formatStr = String(format);
+        const validFormats = ['html', 'markdown', 'pdf', 'docx'];
+        if (!validFormats.includes(formatStr)) {
+            throw new Error(`无效的导出格式: ${formatStr}。支持的格式: ${validFormats.join(', ')}`);
+        }
+
+        const response = await fetch(`${this.baseURL}/api/v1/documents/${id}/export?format=${formatStr}`, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${this.token}`
+            }
+        });
+        
+        if (!response.ok) {
+            throw new Error('导出失败');
+        }
+        
+        return response;
+    }
+
+    // 导入文档
+    async importDocument(title, file) {
+        const formData = new FormData();
+        formData.append('title', title);
+        formData.append('file', file);
+        
+        const response = await fetch(`${this.baseURL}/api/v1/documents/import`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${this.token}`
+            },
+            body: formData
+        });
+        
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || '导入失败');
+        }
+        
+        return response.json();
+    }
+}
+
+// 创建 API 客户端实例
+const api = new ApiClient();
+
+// UI 控制函数
+function showLoginForm() {
+    document.getElementById('login-section').style.display = 'block';
+    document.getElementById('register-section').style.display = 'none';
+    document.getElementById('documents-section').style.display = 'none';
+}
+
+function showRegisterForm() {
+    document.getElementById('login-section').style.display = 'none';
+    document.getElementById('register-section').style.display = 'block';
+    document.getElementById('documents-section').style.display = 'none';
+}
+
+function showDocumentsSection() {
+    document.getElementById('login-section').style.display = 'none';
+    document.getElementById('register-section').style.display = 'none';
+    document.getElementById('documents-section').style.display = 'block';
+}
+
+function showError(elementId, message) {
+    const element = document.getElementById(elementId);
+    if (element) {
+        element.textContent = message;
+        element.classList.remove('d-none');
+        element.style.display = 'block';
+        setTimeout(() => {
+            element.classList.add('d-none');
+            element.style.display = 'none';
+        }, 5000);
+    }
+    // 同时显示 Toast 通知
+    if (typeof Toast !== 'undefined') {
+        Toast.error(message);
+    }
+}
+
+function formatDate(dateString) {
+    if (!dateString) return '未知时间';
+    const date = new Date(dateString);
+    return date.toLocaleString('zh-CN');
+}
+
+// 加载文档列表
+async function loadDocuments(folder = null) {
+    try {
+        const [ownedDocuments, sharedDocuments] = await Promise.all([
+            api.getDocuments(folder),
+            api.getSharedDocuments()
+        ]);
+        
+        // 分别显示我的文档和共享文档
+        renderDocumentList(ownedDocuments.map(doc => ({ ...doc, is_shared: false })));
+        renderSharedDocumentList(sharedDocuments.map(doc => ({ ...doc, is_shared: true })));
+    } catch (error) {
+        console.error('加载文档列表失败:', error);
+        showError('document-error', '加载文档列表失败: ' + error.message);
+    }
+}
+
+// 渲染共享文档列表
+const renderSharedDocumentList = (documents) => {
+    const sharedDocumentList = document.getElementById('shared-document-list');
+    const noSharedDocuments = document.getElementById('no-shared-documents');
+
+    if (!sharedDocumentList || !noSharedDocuments) return;
+
+    if (documents.length === 0) {
+        sharedDocumentList.innerHTML = '';
+        noSharedDocuments.style.display = 'block';
+    } else {
+        noSharedDocuments.style.display = 'none';
+        sharedDocumentList.innerHTML = documents.map(doc => {
+            const tags = doc.tags ? doc.tags.split(',').map(tag => 
+                `<span class="badge bg-info text-dark tag me-1">${tag.trim()}</span>`
+            ).join('') : '<span class="text-muted small">无标签</span>';
+            const lockBadge = doc.is_locked ? '<span class="badge bg-danger ms-2"><i class="bi bi-lock-fill"></i> 已锁定</span>' : '';
+            
+            return `
+                <div class="col-md-6 col-lg-4">
+                    <div class="card document-card h-100 shadow-sm">
+                        <div class="card-body">
+                            <h5 class="card-title">
+                                <i class="bi bi-file-earmark-text text-primary me-1"></i>
+                                ${doc.title}
+                                ${lockBadge}
+                                <span class="badge bg-success ms-2">共享</span>
+                            </h5>
+                            <div class="document-meta mb-2">
+                                <div><i class="bi bi-folder me-1"></i>${doc.folder_name || '未分类'}</div>
+                                <div class="mt-1">${tags}</div>
+                                <div class="mt-1"><i class="bi bi-person me-1"></i>所有者ID: ${doc.owner_id}</div>
+                            </div>
+                            <p class="card-text small text-muted">
+                                <i class="bi bi-clock me-1"></i>更新于 ${formatDate(doc.updated_at)}
+                            </p>
+                        </div>
+                        <div class="card-footer bg-transparent border-top-0">
+                            <div class="btn-group btn-group-sm w-100">
+                                <button class="btn btn-primary" onclick="openDocument(${doc.id})" ${doc.is_locked ? 'disabled' : ''}>
+                                    <i class="bi bi-pencil-square me-1"></i>编辑
+                                </button>
+                                <button class="btn btn-outline-secondary" onclick="exportDocument(${doc.id})">
+                                    <i class="bi bi-download me-1"></i>导出
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+};
+
+const renderDocumentList = (documents) => {
+    const documentList = document.getElementById('document-list');
+    const noDocuments = document.getElementById('no-documents');
+
+    if (documents.length === 0) {
+        documentList.innerHTML = '';
+        noDocuments.style.display = 'block';
+    } else {
+        noDocuments.style.display = 'none';
+        documentList.innerHTML = documents.map(doc => {
+            const tags = doc.tags ? doc.tags.split(',').map(tag => 
+                `<span class="badge bg-info text-dark tag me-1">${tag.trim()}</span>`
+            ).join('') : '<span class="text-muted small">无标签</span>';
+            const lockBadge = doc.is_locked ? '<span class="badge bg-danger ms-2"><i class="bi bi-lock-fill"></i> 已锁定</span>' : '';
+            const sharedBadge = doc.is_shared ? '<span class="badge bg-success ms-2">共享</span>' : '';
+            
+            return `
+                <div class="col-md-6 col-lg-4">
+                    <div class="card document-card h-100 shadow-sm">
+                        <div class="card-body">
+                            <h5 class="card-title">
+                                <i class="bi bi-file-earmark-text text-primary me-1"></i>
+                                ${doc.title}
+                                ${lockBadge}
+                                ${sharedBadge}
+                            </h5>
+                            <div class="document-meta mb-2">
+                                <div><i class="bi bi-folder me-1"></i>${doc.folder_name || '未分类'}</div>
+                                <div class="mt-1">${tags}</div>
+                            </div>
+                            <p class="card-text small text-muted">
+                                <i class="bi bi-clock me-1"></i>更新于 ${formatDate(doc.updated_at)}
+                            </p>
+                        </div>
+                        <div class="card-footer bg-transparent border-top-0">
+                            <div class="d-flex flex-wrap gap-1">
+                                <button class="btn btn-primary btn-sm" onclick="openDocument(${doc.id})" ${doc.is_locked ? 'disabled' : ''}>
+                                    <i class="bi bi-pencil-square me-1"></i>编辑
+                                </button>
+                                <button class="btn btn-outline-secondary btn-sm" onclick="exportDocument(${doc.id})">
+                                    <i class="bi bi-download"></i>
+                                </button>
+                                ${!doc.is_shared && !doc.is_locked ? `
+                                    <button class="btn btn-outline-warning btn-sm" onclick="lockDocument(${doc.id})">
+                                        <i class="bi bi-lock"></i>
+                                    </button>
+                                ` : ''}
+                                ${!doc.is_shared && doc.is_locked && doc.locked_by === getCurrentUserId() ? `
+                                    <button class="btn btn-outline-success btn-sm" onclick="unlockDocument(${doc.id})">
+                                        <i class="bi bi-unlock"></i>
+                                    </button>
+                                ` : ''}
+                                ${!doc.is_shared ? `
+                                    <button class="btn btn-outline-danger btn-sm" onclick="deleteDocument(${doc.id})">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                ` : ''}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+};
+
+// 搜索文档
+async function searchDocuments() {
+    const keyword = document.getElementById('search-keyword').value.trim();
+    const tags = document.getElementById('search-tags').value.trim();
+    const folder = document.getElementById('search-folder').value;
+    const sortBy = document.getElementById('search-sort').value;
+    const order = document.getElementById('search-order').value;
+    
+    const params = {};
+    if (keyword) params.keyword = keyword;
+    if (tags) params.tags = tags;
+    if (folder) params.folder = folder;
+    if (sortBy) params.sort_by = sortBy;
+    if (order) params.order = order;
+    
+    try {
+        const documents = await api.searchDocuments(params);
+        renderDocumentList(documents);
+        
+        // 显示搜索结果数量
+        const documentList = document.getElementById('document-list');
+        const resultCount = document.createElement('div');
+        resultCount.style.cssText = 'margin-bottom: 15px; padding: 10px; background-color: #e3f2fd; border-radius: 5px; color: #1976d2;';
+        resultCount.textContent = `找到 ${documents.length} 个文档`;
+        documentList.insertBefore(resultCount, documentList.firstChild);
+    } catch (error) {
+        console.error('搜索文档失败:', error);
+        showError('search-error', '搜索文档失败: ' + error.message);
+    }
+}
+
+// 加载文件夹和标签
+async function loadFilters() {
+    try {
+        const [folders, tags] = await Promise.all([
+            api.getFolders(),
+            api.getTags()
+        ]);
+        
+        // 更新文件夹下拉框
+        const folderSelect = document.getElementById('search-folder');
+        if (folderSelect) {
+            folderSelect.innerHTML = '<option value="">所有文件夹</option>' + 
+                folders.map(folder => `<option value="${folder}">${folder}</option>`).join('');
+        }
+        
+        // 显示标签列表
+        const tagsContainer = document.getElementById('tags-container');
+        if (tagsContainer && tags.length > 0) {
+            tagsContainer.innerHTML = '<h4>标签:</h4>' + 
+                tags.map(tag => `<span class="tag clickable-tag" onclick="addTagToSearch('${tag}')">${tag}</span>`).join('');
+        }
+    } catch (error) {
+        console.error('加载过滤器失败:', error);
+    }
+}
+
+// 添加标签到搜索
+function addTagToSearch(tag) {
+    const tagsInput = document.getElementById('search-tags');
+    const currentTags = tagsInput.value.split(',').map(t => t.trim()).filter(t => t);
+    
+    if (!currentTags.includes(tag)) {
+        currentTags.push(tag);
+        tagsInput.value = currentTags.join(', ');
+    }
+}
+
+// 锁定文档
+async function lockDocument(documentId) {
+    try {
+        await api.lockDocument(documentId);
+        await loadDocuments(); // 重新加载文档列表
+    } catch (error) {
+        console.error('锁定文档失败:', error);
+        Toast.error('锁定文档失败: ' + error.message);
+    }
+}
+
+// 解锁文档
+async function unlockDocument(documentId) {
+    try {
+        await api.unlockDocument(documentId);
+        await loadDocuments(); // 重新加载文档列表
+    } catch (error) {
+        console.error('解锁文档失败:', error);
+        Toast.error('解锁文档失败: ' + error.message);
+    }
+}
+
+// 获取当前用户ID
+function getCurrentUserId() {
+    // 从 localStorage 获取 user_id，并转换为整数以确保与后端返回的 locked_by 字段类型一致
+    const userId = localStorage.getItem('user_id');
+    if (userId) {
+        const parsedId = parseInt(userId, 10);
+        return isNaN(parsedId) ? null : parsedId;
+    }
+    return null;
+}
+
+// 导出文档
+async function exportDocument(documentId) {
+    try {
+        // 显示格式选择对话框
+        const format = await showExportDialog();
+        if (!format) return;
+        
+        const response = await api.exportDocument(documentId, format);
+        
+        // 创建下载链接
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        
+        // 从响应头获取文件名
+        const contentDisposition = response.headers.get('content-disposition');
+        let filename = 'document';
+        if (contentDisposition) {
+            const matches = contentDisposition.match(/filename=(. +)/);
+            if (matches) filename = matches[1];
+        }
+        
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+        
+    } catch (error) {
+        console.error('导出文档失败:', error);
+        Toast.error('导出文档失败: ' + error.message);
+    }
+}
+
+// 显示导出格式选择对话框
+function showExportDialog() {
+    return new Promise((resolve) => {
+        const modal = document.createElement('div');
+        modal.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+            z-index: 1000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        `;
+        
+        const dialog = document.createElement('div');
+        dialog.style.cssText = `
+            background-color: white;
+            padding: 30px;
+            border-radius: 8px;
+            text-align: center;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+        `;
+        
+        dialog.innerHTML = `
+            <h3 style="margin-top: 0;">选择导出格式</h3>
+            <div style="margin: 20px 0;">
+                <button id="export-html" style="margin: 0 10px; padding: 10px 20px;">HTML</button>
+                <button id="export-markdown" style="margin: 0 10px; padding: 10px 20px;">Markdown</button>
+                <button id="export-pdf" style="margin: 0 10px; padding: 10px 20px;">PDF</button>
+                <button id="export-word" style="margin: 0 10px; padding: 10px 20px;">Word</button>
+                <button id="export-cancel" style="margin: 0 10px; padding: 10px 20px; background-color: #6c757d;">取消</button>
+            </div>
+        `;
+        
+        modal.appendChild(dialog);
+        document.body.appendChild(modal);
+        
+        document.getElementById('export-html').addEventListener('click', () => {
+            document.body.removeChild(modal);
+            resolve('html');
+        });
+        
+        document.getElementById('export-markdown').addEventListener('click', () => {
+            document.body.removeChild(modal);
+            resolve('markdown');
+        });
+        
+        document.getElementById('export-pdf').addEventListener('click', () => {
+            document.body.removeChild(modal);
+            resolve('pdf');
+        });
+        
+        document.getElementById('export-word').addEventListener('click', () => {
+            document.body.removeChild(modal);
+            resolve('docx');
+        });
+        
+        document.getElementById('export-cancel').addEventListener('click', () => {
+            document.body.removeChild(modal);
+            resolve(null);
+        });
+        
+        // 点击背景关闭
+        modal.addEventListener('click', function(e) {
+            if (e.target === modal) {
+                document.body.removeChild(modal);
+                resolve(null);
+            }
+        });
+    });
+}
+
+// 导入文档
+async function importDocument() {
+    try {
+        // 创建文件输入元素
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.accept = '.md,. txt,.html,. docx,. pdf';
+        fileInput.style.display = 'none';
+        
+        fileInput.addEventListener('change', async function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            const title = prompt('请输入文档标题:', file.name.replace(/\.[^/.]+$/, ''));
+            if (!title) return;
+            
+            try {
+                const result = await api.importDocument(title, file);
+                Toast.success(`文档 "${result.title}" 导入成功！`);
+                await loadDocuments(); // 重新加载文档列表
+            } catch (error) {
+                console.error('导入文档失败:', error);
+                Toast.error('导入文档失败: ' + error.message);
+            }
+        });
+        
+        document.body.appendChild(fileInput);
+        fileInput.click();
+        document.body.removeChild(fileInput);
+        
+    } catch (error) {
+        console.error('导入文档失败:', error);
+        Toast.error('导入文档失败: ' + error.message);
+    }
+}
+
+// 打开文档进行协同编辑
+function openDocument(documentId) {
+    const token = api.token;
+    const username = api.username;
+    window.location.href = `/test_collab.html?doc_id=${documentId}&token=${encodeURIComponent(token)}&username=${encodeURIComponent(username)}`;
+}
+
+// 删除文档
+async function deleteDocument(documentId) {
+    if (typeof Toast !== 'undefined' && Toast.confirm) {
+        if (!await Toast.confirm('确定要删除这个文档吗？此操作不可恢复。')) {
+            return;
+        }
+    } else if (!confirm('确定要删除这个文档吗？此操作不可恢复。')) {
+        return;
+    }
+
+    try {
+        await api.deleteDocument(documentId);
+        await loadDocuments(); // 重新加载文档列表
+        if (typeof Toast !== 'undefined') Toast.success('文档已删除');
+    } catch (error) {
+        console.error('删除文档失败:', error);
+        if (typeof Toast !== 'undefined') {
+            Toast.error('删除文档失败: ' + error.message);
+        } else {
+            alert('删除文档失败: ' + error.message);
+        }
+    }
+}
+
+// 创建新文档
+async function createNewDocument() {
+    // 先加载模板列表
+    try {
+        const templates = await api.getTemplates();
+        showTemplateDialog(templates);
+    } catch (error) {
+        console.error('加载模板失败:', error);
+        // 如果加载模板失败，直接创建空白文档
+        createDocumentFromTemplate(null);
+    }
+}
+
+// 显示模板选择对话框
+function showTemplateDialog(templates) {
+    // 创建模态对话框
+    const modal = document.createElement('div');
+    modal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0,0,0,0.5);
+        z-index: 1000;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+    `;
+    
+    const dialog = document.createElement('div');
+    dialog.style.cssText = `
+        background-color: white;
+        padding: 30px;
+        border-radius: 8px;
+        max-width: 600px;
+        max-height: 80vh;
+        overflow-y: auto;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+    `;
+    
+    dialog.innerHTML = `
+        <h2 style="margin-top: 0; color: #333;">选择文档模板</h2>
+        <div id="template-list" style="margin: 20px 0;">
+            <div style="text-align: center; color: #666;">加载中...</div>
+        </div>
+        <div style="text-align: right; margin-top: 20px;">
+            <button id="cancel-template" style="background-color: #6c757d; margin-right: 10px;">取消</button>
+        </div>
+    `;
+    
+    modal.appendChild(dialog);
+    document.body.appendChild(modal);
+    
+    // 渲染模板列表
+    const templateList = document.getElementById('template-list');
+    const categories = {};
+    
+    // 按分类组织模板
+    templates.forEach(template => {
+        if (!categories[template.category]) {
+            categories[template.category] = [];
+        }
+        categories[template.category].push(template);
+    });
+    
+    let html = '';
+    Object.keys(categories).forEach(category => {
+        html += `<h3 style="color: #666; margin-bottom: 10px;">${getCategoryName(category)}</h3>`;
+        html += '<div style="margin-bottom: 20px;">';
+        
+        categories[category].forEach(template => {
+            html += `
+                <div class="template-item" style="
+                    border: 1px solid #ddd;
+                    border-radius: 5px;
+                    padding: 15px;
+                    margin-bottom: 10px;
+                    cursor: pointer;
+                    transition: background-color 0.2s;
+                " data-template-id="${template.id}" data-template-content="${encodeURIComponent(template.content)}">
+                    <h4 style="margin: 0 0 5px 0; color: #333;">${template.name}</h4>
+                    <p style="margin: 0; color: #666; font-size: 14px;">${template.description || '无描述'}</p>
+                </div>
+            `;
+        });
+        
+        html += '</div>';
+    });
+    
+    // 添加空白文档选项
+    html += `
+        <h3 style="color: #666; margin-bottom: 10px;">其他</h3>
+        <div class="template-item" style="
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+            margin-bottom: 10px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        " data-template-id="blank">
+            <h4 style="margin: 0 0 5px 0; color: #333;">空白文档</h4>
+            <p style="margin: 0; color: #666; font-size: 14px;">创建一个空白文档，自由发挥</p>
+        </div>
+    `;
+    
+    templateList.innerHTML = html;
+    
+    // 添加交互效果
+    document.querySelectorAll('.template-item').forEach(item => {
+        item.addEventListener('mouseenter', function() {
+            this.style.backgroundColor = '#f8f9fa';
+        });
+        
+        item.addEventListener('mouseleave', function() {
+            this.style.backgroundColor = 'white';
+        });
+        
+        item.addEventListener('click', function() {
+            const templateId = this.dataset.templateId;
+            const templateContent = this.dataset.templateContent ?  decodeURIComponent(this.dataset.templateContent) : '';
+            createDocumentFromTemplate(templateId, templateContent);
+            document.body.removeChild(modal);
+        });
+    });
+    
+    // 取消按钮
+    document.getElementById('cancel-template').addEventListener('click', function() {
+        document.body.removeChild(modal);
+    });
+    
+    // 点击背景关闭
+    modal.addEventListener('click', function(e) {
+        if (e.target === modal) {
+            document.body.removeChild(modal);
+        }
+    });
+}
+
+// 获取分类的中文名称
+function getCategoryName(category) {
+    const names = {
+        'general': '通用',
+        'business': '商务',
+        'project': '项目',
+        'technical': '技术'
+    };
+    return names[category] || category;
+}
+
+// 从模板创建文档
+async function createDocumentFromTemplate(templateId, templateContent) {
+    const title = prompt('请输入文档标题:', '新文档');
+    if (!title) return;
+
+    try {
+        await api.createDocument(title, templateContent || '');
+        await loadDocuments(); // 重新加载文档列表
+    } catch (error) {
+        console.error('创建文档失败:', error);
+        Toast.error('创建文档失败: ' + error.message);
+    }
+}
+
+// 检查登录状态
+async function checkAuthStatus() {
+    const token = localStorage.getItem('access_token');
+    const username = localStorage.getItem('username');
+    const userId = localStorage.getItem('user_id');
+
+    if (token && username) {
+        try {
+            // 验证 token 是否有效
+            await api.getCurrentUser();
+            api.setToken(token, username, userId);
+            document.getElementById('current-username').textContent = username;
+            showDocumentsSection();
+            await loadDocuments();
+            await loadFilters(); // 加载过滤器
+        } catch (error) {
+            // token 无效，清除并显示登录表单
+            api.clearAuth();
+            showLoginForm();
+        }
+    } else {
+        showLoginForm();
+    }
+}
+
+// 切换高级搜索
+function toggleAdvancedSearch() {
+    const advancedSearch = document.getElementById('advanced-search');
+    advancedSearch.style.display = advancedSearch.style.display === 'none' ? 'block' : 'none';
+}
+
+// 切换文件夹
+function switchFolder(folder) {
+    // 更新标签状态
+    document.querySelectorAll('.folder-tab').forEach(tab => {
+        tab.classList.remove('active');
+        if (tab.textContent === folder || '全部') {
+            tab.classList.add('active');
+        }
+    });
+    
+    // 加载对应文件夹的文档
+    loadDocuments(folder === '全部' ?  null : folder);
+}
+
+// 事件监听器
+document.addEventListener('DOMContentLoaded', function() {
+    // 登录表单
+    document.getElementById('login-form').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const username = document.getElementById('username').value;
+        const password = document.getElementById('password').value;
+
+        try {
+            await api.login(username, password);
+            document.getElementById('current-username').textContent = username;
+            showDocumentsSection();
+            await loadDocuments();
+            await loadFilters(); // 加载过滤器
+        } catch (error) {
+            showError('login-error', error.message);
+        }
+    });
+
+    // 注册表单
+    document.getElementById('register-form').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const username = document.getElementById('reg-username').value;
+        const email = document.getElementById('reg-email').value;
+        const password = document.getElementById('reg-password').value;
+
+        try {
+            await api.register(username, email, password);
+            // 注册成功后自动登录
+            await api.login(username, password);
+            document.getElementById('current-username').textContent = username;
+            showDocumentsSection();
+            await loadDocuments();
+        } catch (error) {
+            showError('register-error', error.message);
+        }
+    });
+
+    // 切换表单
+    document.getElementById('show-register').addEventListener('click', showRegisterForm);
+    document.getElementById('show-login').addEventListener('click', showLoginForm);
+
+    // 退出登录
+    document.getElementById('logout-btn').addEventListener('click', async function() {
+        let shouldLogout = false;
+        if (typeof Toast !== 'undefined' && Toast.confirm) {
+            shouldLogout = await Toast.confirm('确定要退出登录吗？');
+        } else {
+            shouldLogout = confirm('确定要退出登录吗？');
+        }
+        
+        if (shouldLogout) {
+            api.clearAuth();
+            showLoginForm();
+        }
+    });
+
+    // 创建文档
+    document.getElementById('create-document-btn').addEventListener('click', createNewDocument);
+
+    // 导入文档
+    document.getElementById('import-document-btn').addEventListener('click', importDocument);
+
+    // 检查登录状态
+    checkAuthStatus();
+});
+
+==================== 分界线 ====================
+
+文件: editor.js
+路径: D:\Projects\edit\static\editor.js
+内容:
+// static/editor.js - 增强版协同编辑器（支持富文本、CRDT 增量同步和自动保存）
+let ws;
+let documentId = 1;
+let localContent = ""; // 本地内容缓存，用于增量同步
+let autoSaveTimer = null;
+let lastSaveTime = 0;
+
+// WebSocket 重连配置
+let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 10;
+const BASE_RECONNECT_INTERVAL = 1000; // 基础重连间隔 1 秒
+const MAX_RECONNECT_INTERVAL = 30000; // 最大重连间隔 30 秒
+let currentToken = ""; // 保存当前 token 用于重连
+
+// 内容发送防抖定时器
+let contentSendTimer = null;
+const CONTENT_SEND_DEBOUNCE = 150; // 150ms 防抖，平衡实时性和稳定性
+
+// 标志：是否正在接收远程更新，防止循环
+let isReceivingRemoteUpdate = false;
+
+// CRDT 状态
+let crdtVersion = 0; // 当前 CRDT 版本
+let pendingOps = []; // 待确认的操作
+let useCRDT = false; // 暂时禁用 CRDT 模式，使用全量同步确保实时同步正常工作
+
+// 客户端 ID（用于 CRDT 操作标识）
+const clientId = 'client_' + Math.random().toString(36).substr(2, 9);
+// 本地用户的数字 user_id（从服务器获取，用于过滤自己的消息）
+let localUserId = null;
+const AUTH_FAILURE_CODE = 1008;
+
+function clearStoredAuth() {
+    if (window.api && typeof window.api.clearAuth === 'function') {
+        window.api.clearAuth();
+    } else {
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('username');
+        localStorage.removeItem('user_id');
+    }
+}
+
+function redirectToLogin() {
+    const redirectDelay = 1200;
+    setTimeout(() => {
+        window.location.href = '/';
+    }, redirectDelay);
+}
+
+/**
+ * 将 Quill Delta 转换为 CRDT 操作序列
+ * @param {Object} delta - Quill delta 对象
+ * @param {number} baseIndex - 起始索引
+ * @returns {Array} CRDT 操作数组
+ */
+function deltaToOps(delta, baseIndex = 0) {
+    const ops = [];
+    let index = baseIndex;
+    const timestamp = Date.now();
+    
+    if (!delta || !delta.ops) return ops;
+    
+    for (const op of delta.ops) {
+        if (op.retain !== undefined) {
+            // retain：保持位置不变，移动索引
+            index += op.retain;
+        } else if (op.insert !== undefined) {
+            // insert：插入文本或嵌入对象
+            const text = typeof op.insert === 'string' ? op.insert : '\n';
+            for (let i = 0; i < text.length; i++) {
+                ops.push({
+                    type: 'insert',
+                    position: index + i,
+                    char: text[i],
+                    client_id: clientId,
+                    timestamp: timestamp + i * 0.001, // 确保顺序
+                    op_id: `${clientId}:${timestamp}:${index + i}`
+                });
+            }
+            index += text.length;
+        } else if (op.delete !== undefined) {
+            // delete：删除字符
+            for (let i = 0; i < op.delete; i++) {
+                ops.push({
+                    type: 'delete',
+                    position: index, // 删除时位置不变（后面的字符会前移）
+                    client_id: clientId,
+                    timestamp: timestamp + i * 0.001,
+                    op_id: `${clientId}:${timestamp}:del:${i}`
+                });
+            }
+            // 删除操作不移动 index（因为字符被删除了）
+        }
+    }
+    
+    return ops;
+}
+
+/**
+ * 将 CRDT 操作应用到 Quill 编辑器
+ * @param {Array} ops - CRDT 操作数组
+ */
+function applyOpsToEditor(ops) {
+    if (!window.quillEditor || !ops || ops.length === 0) return;
+    
+    // 按位置和时间戳排序操作
+    const sortedOps = [...ops].sort((a, b) => {
+        if (a.position !== b.position) return a.position - b.position;
+        return a.timestamp - b.timestamp;
+    });
+    
+    // 转换为 Quill delta
+    const delta = { ops: [] };
+    let currentPos = 0;
+    
+    for (const op of sortedOps) {
+        if (op.type === 'insert') {
+            if (op.position > currentPos) {
+                delta.ops.push({ retain: op.position - currentPos });
+                currentPos = op.position;
+            }
+            delta.ops.push({ insert: op.char });
+            currentPos += 1;
+        } else if (op.type === 'delete') {
+            if (op.position > currentPos) {
+                delta.ops.push({ retain: op.position - currentPos });
+                currentPos = op.position;
+            }
+            delta.ops.push({ delete: 1 });
+        }
+    }
+    
+    // 应用 delta
+    if (delta.ops.length > 0) {
+        window.quillEditor.updateContents(delta, 'silent');
+    }
+}
+
+/**
+ * 智能应用远程内容更新
+ * 使用 diff 算法找出差异，只更新变化的部分，保留用户正在编辑的位置
+ */
+function applyRemoteContent(remoteHtml) {
+    if (!window.quillEditor) return;
+    
+    // 获取当前状态
+    const selection = window.quillEditor.getSelection();
+    const currentText = window.quillEditor.getText();
+    
+    // 将远程 HTML 转换为 Delta
+    const remoteDelta = window.quillEditor.clipboard.convert(remoteHtml);
+    
+    // 获取远程内容的纯文本（用于比较）
+    let remoteText = '';
+    remoteDelta.ops.forEach(op => {
+        if (typeof op.insert === 'string') {
+            remoteText += op.insert;
+        } else if (op.insert) {
+            remoteText += '\n'; // 嵌入对象算一个字符
+        }
+    });
+    
+    // 如果文本完全相同，可能只是格式变化，直接应用
+    if (currentText === remoteText) {
+        window.quillEditor.setContents(remoteDelta, 'silent');
+        if (selection) {
+            window.quillEditor.setSelection(selection.index, selection.length, 'silent');
+        }
+        return;
+    }
+    
+    // 找出差异位置
+    const diff = findTextDiff(currentText, remoteText);
+    
+    if (diff) {
+        // 计算光标偏移
+        let newCursorPos = selection ? selection.index : 0;
+        
+        // 如果修改发生在光标之前，需要调整光标位置
+        if (selection && diff.start < selection.index) {
+            const lengthDiff = diff.newText.length - diff.oldText.length;
+            newCursorPos = Math.max(0, selection.index + lengthDiff);
+        }
+        
+        // 应用差异：删除旧内容，插入新内容
+        const delta = {
+            ops: []
+        };
+        
+        if (diff.start > 0) {
+            delta.ops.push({ retain: diff.start });
+        }
+        if (diff.oldText.length > 0) {
+            delta.ops.push({ delete: diff.oldText.length });
+        }
+        if (diff.newText.length > 0) {
+            delta.ops.push({ insert: diff.newText });
+        }
+        
+        window.quillEditor.updateContents(delta, 'silent');
+        
+        // 恢复光标位置
+        if (selection) {
+            setTimeout(() => {
+                const maxPos = window.quillEditor.getLength() - 1;
+                window.quillEditor.setSelection(
+                    Math.min(newCursorPos, maxPos), 
+                    selection.length, 
+                    'silent'
+                );
+            }, 0);
+        }
+    } else {
+        // 差异太大，回退到全量更新
+        window.quillEditor.setContents(remoteDelta, 'silent');
+        if (selection) {
+            setTimeout(() => {
+                const maxPos = window.quillEditor.getLength() - 1;
+                window.quillEditor.setSelection(
+                    Math.min(selection.index, maxPos), 
+                    selection.length, 
+                    'silent'
+                );
+            }, 0);
+        }
+    }
+}
+
+/**
+ * 找出两个字符串之间的差异
+ * 返回 { start, oldText, newText } 或 null（如果差异太复杂）
+ */
+function findTextDiff(oldText, newText) {
+    // 找到第一个不同的位置
+    let start = 0;
+    const minLen = Math.min(oldText.length, newText.length);
+    
+    while (start < minLen && oldText[start] === newText[start]) {
+        start++;
+    }
+    
+    // 从末尾找到最后一个不同的位置
+    let oldEnd = oldText.length;
+    let newEnd = newText.length;
+    
+    while (oldEnd > start && newEnd > start && 
+           oldText[oldEnd - 1] === newText[newEnd - 1]) {
+        oldEnd--;
+        newEnd--;
+    }
+    
+    // 提取差异部分
+    const oldPart = oldText.substring(start, oldEnd);
+    const newPart = newText.substring(start, newEnd);
+    
+    // 如果差异太大（超过一半内容），返回 null 使用全量更新
+    if (oldPart.length > oldText.length / 2 && newPart.length > newText.length / 2) {
+        return null;
+    }
+    
+    return {
+        start: start,
+        oldText: oldPart,
+        newText: newPart
+    };
+}
+
+/**
+ * 计算指数退避重连间隔
+ * @param {number} attempt - 当前重连尝试次数
+ * @returns {number} 重连间隔（毫秒）
+ */
+function getReconnectInterval(attempt) {
+    // 指数退避 + 随机抖动
+    const interval = Math.min(
+        BASE_RECONNECT_INTERVAL * Math.pow(2, attempt - 1),
+        MAX_RECONNECT_INTERVAL
+    );
+    // 添加 0-1000ms 的随机抖动，避免雷群效应
+    return interval + Math.random() * 1000;
+}
+
+// 通过 WebSocket 发送内容更新（支持 CRDT 增量和全量回退）
+function sendContentUpdate(delta = null) {
+    // 如果正在接收远程更新，不发送，防止循环
+    if (isReceivingRemoteUpdate) {
+        console.log('正在接收远程更新，跳过发送');
+        return;
+    }
+    
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    
+    // 防抖处理
+    clearTimeout(contentSendTimer);
+    contentSendTimer = setTimeout(() => {
+        // 再次检查，防止在防抖期间状态改变
+        if (isReceivingRemoteUpdate) {
+            console.log('防抖期间收到远程更新，跳过发送');
+            return;
+        }
+        
+        // 如果有 delta 且启用 CRDT，发送增量操作
+        if (useCRDT && delta && delta.ops && delta.ops.length > 0) {
+            const ops = deltaToOps(delta);
+            if (ops.length > 0) {
+                pendingOps.push(...ops);
+                ws.send(JSON.stringify({
+                    type: "crdt_ops",
+                    ops: ops,
+                    version: crdtVersion
+                }));
+                console.log('CRDT 增量操作已发送:', ops.length, '个操作');
+                return;
+            }
+        }
+        
+        // 回退到全量同步
+        const currentContent = window.getCurrentContent ? window.getCurrentContent() : 
+            (window.quillEditor ? window.quillEditor.root.innerHTML : 
+            (document.getElementById("editor")?.value || ""));
+        
+        // 内容没有变化则不发送
+        if (currentContent === localContent) return;
+        
+        // 更新本地内容缓存
+        localContent = currentContent;
+        
+        // 通过 WebSocket 发送全量内容更新
+        ws.send(JSON.stringify({
+            type: "content_update",
+            payload: { html: currentContent }
+        }));
+        
+        console.log('WebSocket 全量内容更新已发送');
+    }, CONTENT_SEND_DEBOUNCE);
+}
+
+
+// 更新连接状态显示
+function updateConnectionStatus(status) {
+    const indicator = document.getElementById('connection-status');
+    if (indicator) {
+        switch(status) {
+            case 'connected':
+                indicator.className = 'status-connected';
+                indicator.textContent = '● 已连接';
+                break;
+            case 'disconnected':
+                indicator.className = 'status-disconnected';
+                indicator.textContent = '● 已断开';
+                break;
+            case 'reconnecting':
+                indicator.className = 'status-reconnecting';
+                indicator.textContent = '● 重连中...';
+                break;
+        }
+    }
+    
+    // 同时更新编辑器状态提示
+    const statusText = document.getElementById('status-text');
+    if (statusText) {
+        switch(status) {
+            case 'connected':
+                statusText.textContent = '已连接';
+                break;
+            case 'disconnected':
+                statusText.textContent = '已断开';
+                break;
+            case 'reconnecting':
+                statusText.textContent = '重连中...';
+                break;
+        }
+    }
+}
+
+function connect(doc_id, token) {
+    documentId = doc_id;
+    currentToken = token; // 保存 token 用于重连
+    
+    // 从 localStorage 获取当前用户的 user_id
+    // 强制转换为数字，防止类型不匹配导致的比较问题
+    const storedUserId = localStorage.getItem('user_id');
+    localUserId = storedUserId ? Number(storedUserId) : null;
+    // 如果转换失败（NaN），设置为 null
+    if (localUserId !== null && isNaN(localUserId)) {
+        localUserId = null;
+    }
+    console.log('当前本地用户 ID:', localUserId, typeof localUserId);
+    
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const tokenPart = token ? `?token=${token}` : '';
+    ws = new WebSocket(`${protocol}//${location.host}/api/v1/ws/documents/${doc_id}${tokenPart}`);
+
+    ws.onmessage = async (event) => {
+        const msg = JSON.parse(event.data);
+        console.log('收到WebSocket消息:', msg.type, msg);
+        
+        // 处理心跳消息
+        if (msg.type === "ping") {
+            ws.send(JSON.stringify({ type: "pong" }));
+            return;
+        }
+        
+        // 处理 CRDT 操作确认
+        if (msg.type === "crdt_ack") {
+            crdtVersion = msg.version || crdtVersion;
+            // 清理已确认的操作
+            const appliedCount = msg.applied || 0;
+            pendingOps.splice(0, appliedCount);
+            console.log('CRDT 确认，版本:', crdtVersion);
+            return;
+        }
+        
+        // 处理远程 CRDT 操作
+        if (msg.type === "crdt_ops") {
+            const ops = msg.ops || [];
+            // 确保用数字类型进行比较，过滤自己发送的操作
+            const msgUserId = Number(msg.user_id);
+            if (ops.length > 0 && msgUserId !== localUserId) {
+                isReceivingRemoteUpdate = true;
+                applyOpsToEditor(ops);
+                crdtVersion = msg.version || crdtVersion;
+                // 更新本地内容缓存
+                if (window.quillEditor) {
+                    localContent = window.quillEditor.root.innerHTML;
+                }
+                setTimeout(() => {
+                    isReceivingRemoteUpdate = false;
+                }, 50);
+                console.log('应用远程 CRDT 操作:', ops.length, '个');
+            }
+            return;
+        }
+        
+        if (msg.type === "init") {
+            // 初始化内容 - 支持新旧两种格式
+            const serverContent = msg.payload?.html || msg.content || "";
+            const serverTimestamp = Date.now();
+            
+            // 设置标志：正在接收远程更新
+            isReceivingRemoteUpdate = true;
+            
+            // 🎯 Smart Draft Recovery Logic
+            const draftKey = `draft_${doc_id}`;
+            const draftDataStr = localStorage.getItem(draftKey);
+            
+            let shouldPromptUser = false;
+            let draftContent = "";
+            let draftTimestamp = 0;
+            
+            if (draftDataStr) {
+                try {
+                    const draftData = JSON.parse(draftDataStr);
+                    draftContent = draftData.content || "";
+                    draftTimestamp = draftData.timestamp || 0;
+                    
+                    // 计算草稿年龄（毫秒）
+                    const draftAge = Date.now() - draftTimestamp;
+                    const ONE_HOUR = 60 * 60 * 1000;
+                    
+                    // 🧹 Silent Cleanup Scenarios (The "Happy Path")
+                    if (draftAge > ONE_HOUR) {
+                        // Scenario 1: 草稿过期
+                        console.log('🧹 草稿已过期（>1小时），静默清理');
+                        localStorage.removeItem(draftKey);
+                    } else if (!draftContent || draftContent.trim() === '' || draftContent === '<p><br></p>') {
+                        // Scenario 2: 草稿为空
+                        console.log('🧹 草稿为空，静默清理');
+                        localStorage.removeItem(draftKey);
+                    } else if (draftContent === serverContent) {
+                        // Scenario 3: 草稿与服务器内容完全一致（最常见的场景）
+                        console.log('✅ 本地草稿与服务器内容一致，静默清理冗余备份');
+                        localStorage.removeItem(draftKey);
+                    } else {
+                        // ⚠️ Conflict Detected: 草稿与服务器内容不同
+                        shouldPromptUser = true;
+                    }
+                } catch (e) {
+                    console.error('⚠️ 解析本地草稿失败:', e);
+                    // 错误时保留草稿，不删除（避免数据丢失）
+                }
+            }
+            
+            // 🚨 Conflict Handling (The "Rescue Path")
+            if (shouldPromptUser) {
+                const confirmMessage = `⚠️ 检测到本地存在未同步的草稿\n` +
+                    `保存时间: ${new Date(draftTimestamp).toLocaleString()}\n` +
+                    `草稿大小: ${Math.round(draftContent.length / 1024)}KB\n` +
+                    `服务器内容: ${Math.round(serverContent.length / 1024)}KB\n\n` +
+                    `是否使用本地草稿？`;
+                
+                let useDraft = false;
+                if (typeof Toast !== 'undefined' && Toast.confirm) {
+                    useDraft = await Toast.confirm(confirmMessage, { 
+                        confirmText: '✅ 使用草稿', 
+                        cancelText: '❌ 使用服务器内容' 
+                    });
+                } else {
+                    useDraft = confirm(confirmMessage);
+                }
+                
+                if (useDraft) {
+                    // 用户选择草稿：应用 → 同步 → 删除
+                    console.log('📝 用户选择使用本地草稿，开始恢复流程...');
+                    
+                    try {
+                        // Step 1: 应用草稿到编辑器
+                        if (window.quillEditor) {
+                            window.quillEditor.setContents(
+                                window.quillEditor.clipboard.convert(draftContent), 
+                                'silent'
+                            );
+                        } else {
+                            const editor = document.getElementById("editor");
+                            if (editor) editor.value = draftContent;
+                        }
+                        localContent = draftContent;
+                        console.log('✅ 步骤1: 草稿已应用到编辑器');
+                        
+                        // Step 2: 立即同步到服务器
+                        isReceivingRemoteUpdate = false;
+                        
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify({
+                                type: "content_update",
+                                payload: { html: draftContent }
+                            }));
+                            console.log('✅ 步骤2: 草稿内容已同步到服务器');
+                            
+                            // Step 3: 同步成功后才删除草稿
+                            setTimeout(() => {
+                                localStorage.removeItem(draftKey);
+                                console.log('✅ 步骤3: 草稿已安全删除');
+                            }, 500);
+                        } else {
+                            console.warn('⚠️ WebSocket 未连接，草稿保留，将在下次连接时重试');
+                        }
+                        
+                        setTimeout(() => {
+                            isReceivingRemoteUpdate = false;
+                        }, 200);
+                        
+                        // 早期返回，跳过后面的服务器内容加载
+                        return;
+                    } catch (err) {
+                        console.error('❌ 恢复草稿失败:', err);
+                        // 失败时不删除草稿，保留数据
+                    }
+                } else {
+                    // 用户选择服务器内容：清理草稿
+                    console.log('🗑️ 用户选择服务器内容，清理草稿');
+                    localStorage.removeItem(draftKey);
+                }
+            }
+            
+            // 📥 Load Server Content (Default Path)
+            if (window.quillEditor) {
+                window.quillEditor.setContents(
+                    window.quillEditor.clipboard.convert(serverContent), 
+                    'silent'
+                );
+            } else {
+                const editor = document.getElementById("editor");
+                if (editor) editor.value = serverContent;
+            }
+            localContent = serverContent;
+            
+            // 重置标志
+            setTimeout(() => {
+                isReceivingRemoteUpdate = false;
+            }, 100);
+            
+            // 保存服务器时间戳
+            localStorage.setItem(`server_time_${doc_id}`, serverTimestamp.toString());
+        }
+        if (msg.type === "content" || msg.type === "content_update") {
+            // 过滤自己发送的内容更新，防止回环
+            // 确保用数字类型进行比较
+            const msgUserId = Number(msg.user_id);
+            if (msgUserId === localUserId) {
+                console.log('跳过自己发送的内容更新');
+                return;
+            }
+            
+            // 获取收到的内容
+            const remoteContent = msg.payload?.html || msg.content || "";
+            
+            // 获取当前本地内容
+            const currentLocalContent = window.quillEditor ? 
+                window.quillEditor.root.innerHTML : 
+                (document.getElementById("editor")?.value || "");
+            
+            // 如果内容完全相同，跳过
+            if (remoteContent === currentLocalContent) {
+                console.log('收到的内容与本地相同，跳过更新');
+                return;
+            }
+            
+            // 设置标志：正在接收远程更新
+            isReceivingRemoteUpdate = true;
+            
+            if (window.quillEditor) {
+                // 使用增量更新而不是全量替换
+                applyRemoteContent(remoteContent);
+            } else {
+                const editor = document.getElementById("editor");
+                if (editor) {
+                    const selectionStart = editor.selectionStart;
+                    const selectionEnd = editor.selectionEnd;
+                    editor.value = remoteContent;
+                    editor.setSelectionRange(selectionStart, selectionEnd);
+                }
+            }
+            
+            localContent = remoteContent;
+            console.log('已更新远程内容');
+            
+            // 重置标志（延迟重置，给更多缓冲时间避免立即发送造成冲突）
+            setTimeout(() => {
+                isReceivingRemoteUpdate = false;
+            }, 200);
+        }
+        if (msg.type === "cursor") {
+            const cursorData = msg.cursor || { position: msg.payload?.index || 0 };
+            drawCursor(msg.user_id, msg.username || msg.user || "匿名", cursorData, msg.color);
+        }
+        if (msg.type === "user_joined" || (msg.type === "presence" && msg.action === "join")) {
+            console.log("用户加入:", msg.username || msg.user);
+            // 刷新在线用户列表
+            if (typeof updateOnlineUsersList === 'function') {
+                updateOnlineUsersList(msg.online_users_info || []);
+            }
+        }
+        if (msg.type === "presence" && msg.action === "init") {
+            // 初始化在线用户列表
+            console.log("在线用户:", msg.online_users_info || msg.online_users);
+            if (typeof updateOnlineUsersList === 'function') {
+                updateOnlineUsersList(msg.online_users_info || []);
+            }
+        }
+        if (msg.type === "presence" && msg.action === "leave") {
+            console.log("用户离开:", msg.username || msg.user_id);
+            // 刷新在线用户列表
+            if (typeof updateOnlineUsersList === 'function') {
+                updateOnlineUsersList(msg.online_users_info || []);
+            }
+        }
+        if (msg.type === "error") {
+            console.error("服务器错误:", msg.payload?.message || msg.message);
+        }
+    };
+
+    ws.onopen = () => {
+        console.log("WS 已连接");
+        reconnectAttempts = 0; // 重置重连计数
+        updateConnectionStatus('connected');
+    };
+    
+    ws.onerror = (e) => {
+        console.error("WebSocket 错误:", e);
+        updateConnectionStatus('disconnected');
+    };
+    
+    ws.onclose = (event) => {
+        console.log("WS 断开", event.code, event.reason);
+        updateConnectionStatus('disconnected');
+        
+        // 连接断开时保存本地草稿作为备份
+        if (documentId) {
+            const currentContent = window.quillEditor ? 
+                window.quillEditor.root.innerHTML : 
+                (document.getElementById("editor")?.value || "");
+            if (currentContent) {
+                saveLocalDraft(documentId, currentContent);
+                console.log('连接断开，已保存本地草稿');
+            }
+        }
+        
+        if (event.code === AUTH_FAILURE_CODE) {
+            console.warn('WebSocket 鉴权失败，停止重连');
+            clearStoredAuth();
+            if (typeof Toast !== 'undefined') {
+                Toast.error('登录状态已过期，请重新登录');
+            }
+            redirectToLogin();
+            return;
+        }
+        
+        // 尝试自动重连（指数退避）
+        if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+            reconnectAttempts++;
+            updateConnectionStatus('reconnecting');
+            const interval = getReconnectInterval(reconnectAttempts);
+            console.log(`尝试重连... (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})，等待 ${Math.round(interval/1000)}s`);
+            setTimeout(() => {
+                connect(documentId, currentToken);
+            }, interval);
+        } else {
+            console.log("已达到最大重连次数");
+            if (typeof Toast !== 'undefined') {
+                Toast.error('连接已断开，请刷新页面重新连接', { duration: 0 }); // 0 表示不自动关闭
+            }
+        }
+    };
+}
+
+function setupEditor() {
+    // 🔥 修复 Issue A: 自动保存功能 - 始终保存到 localStorage 作为热备份
+    // 这是针对服务器崩溃、网络中断、浏览器崩溃的最后一道防线
+    window.autoSave = function() {
+        if (!documentId) return;
+        
+        const currentContent = window.getCurrentContent ? window.getCurrentContent() : 
+            (window.quillEditor ? window.quillEditor.root.innerHTML : 
+            (document.getElementById("editor")?.value || ""));
+        
+        // 内容没有变化则不保存
+        if (currentContent === localContent) return;
+        
+        // 防抖：避免频繁保存本地草稿 (降低到 500ms 以提高备份频率)
+        clearTimeout(autoSaveTimer);
+        autoSaveTimer = setTimeout(() => {
+            saveLocalDraft(documentId, currentContent);
+            lastSaveTime = Date.now();
+            
+            // 根据连接状态提供不同的日志信息
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                console.log('💾 热备份已保存 (在线状态)');
+            } else {
+                console.log('💾 离线备份已保存 (断线状态)');
+            }
+        }, 500); // 从 1000ms 降低到 500ms
+    };
+    
+    // 页面关闭或刷新前保存草稿（仅当连接断开时）
+    let beforeUnloadSaved = false; // 防止重复保存标志
+    window.addEventListener('beforeunload', function() {
+        // 🔥 修复: 避免与 onclose 重复保存
+        if (beforeUnloadSaved) return;
+        
+        if (ws && ws.readyState !== WebSocket.OPEN && documentId) {
+            const currentContent = window.quillEditor ? 
+                window.quillEditor.root.innerHTML : 
+                (document.getElementById("editor")?.value || "");
+            if (currentContent && currentContent !== localContent) {
+                saveLocalDraft(documentId, currentContent);
+                beforeUnloadSaved = true;
+            }
+        }
+    });
+    
+    // 监听编辑器内容变化
+    if (window.quillEditor) {
+        // Quill 编辑器 - 监听 text-change 事件，传递 delta 以支持 CRDT
+        window.quillEditor.on('text-change', function(delta, oldDelta, source) {
+            // 只处理用户输入，忽略程序化更改
+            if (source === 'user') {
+                sendContentUpdate(delta); // 传递 delta 用于 CRDT 转换
+                // 仅在断开连接时保存草稿
+                window.autoSave();
+            }
+        });
+    } else {
+        const editor = document.getElementById("editor");
+        if (editor) {
+            editor.addEventListener("input", () => {
+                sendContentUpdate();
+                window.autoSave();
+            });
+        }
+    }
+    
+    // 发送光标位置
+    function sendCursor() {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        
+        let position = 0;
+        let length = 0;
+        
+        if (window.quillEditor) {
+            const selection = window.quillEditor.getSelection();
+            if (selection) {
+                position = selection.index;
+                length = selection.length;
+            }
+        } else {
+            const editor = document.getElementById("editor");
+            if (editor) {
+                position = editor.selectionStart || 0;
+                length = (editor.selectionEnd || 0) - position;
+            }
+        }
+        
+        ws.send(JSON.stringify({
+            type: "cursor",
+            cursor: { position, length }
+        }));
+    }
+    
+    // 绑定光标事件
+    if (window.quillEditor) {
+        window.quillEditor.on('selection-change', function(range) {
+            if (range) sendCursor();
+        });
+    } else {
+        const editor = document.getElementById("editor");
+        if (editor) {
+            editor.addEventListener("keyup", sendCursor);
+            editor.addEventListener("click", sendCursor);
+            editor.addEventListener("selectionchange", () => setTimeout(sendCursor, 50));
+        }
+    }
+}
+
+// 保存本地草稿
+function saveLocalDraft(documentId, content) {
+    // 🔥 关键修复: 拒绝保存空内容或无效内容
+    if (!content || content.trim() === '' || content === '<p><br></p>') {
+        console.warn('⚠️ 拒绝保存空草稿，跳过');
+        return;
+    }
+    
+    const draftKey = `draft_${documentId}`;
+    const draftData = {
+        content: content,
+        timestamp: Date.now()
+    };
+    localStorage.setItem(draftKey, JSON.stringify(draftData));
+    console.log(`💾 已保存草稿 (${Math.round(content.length / 1024)}KB)`);
+}
+
+// 光标绘制功能
+function drawCursor(user_id, username, cursorData, color = "#FF5733") {
+    // cursorData 可能是数字（位置）或对象 {position, length}
+    const position = typeof cursorData === 'object' ? (cursorData.position || 0) : (cursorData || 0);
+    const length = typeof cursorData === 'object' ? (cursorData.length || 0) : 0;
+    
+    // 跳过自己的光标
+    if (user_id === localUserId) return;
+    
+    let cursor = document.getElementById(`cursor-${user_id}`);
+    let selection = document.getElementById(`selection-${user_id}`);
+    
+    if (!cursor) {
+        cursor = document.createElement("div");
+        cursor.id = `cursor-${user_id}`;
+        cursor.className = "remote-cursor";
+        cursor.innerHTML = `<div class="cursor-label" style="background-color:${color};">${username}</div>`;
+        
+        const cursorLayer = document.getElementById("cursor-layer");
+        if (cursorLayer) cursorLayer.appendChild(cursor);
+    }
+    
+    // 选区高亮
+    if (!selection) {
+        selection = document.createElement("div");
+        selection.id = `selection-${user_id}`;
+        selection.className = "remote-selection";
+        selection.style.backgroundColor = color;
+        selection.style.opacity = "0.3";
+        selection.style.position = "absolute";
+        selection.style.pointerEvents = "none";
+        selection.style.zIndex = "5";
+        
+        const cursorLayer = document.getElementById("cursor-layer");
+        if (cursorLayer) cursorLayer.appendChild(selection);
+    }
+
+    // 对于 Quill 编辑器，使用 getBounds 获取精确位置
+    if (window.quillEditor) {
+        try {
+            const editorContainer = document.querySelector('.ql-editor');
+            if (!editorContainer) return;
+            
+            const containerRect = editorContainer.getBoundingClientRect();
+            const bounds = window.quillEditor.getBounds(position, length || 1);
+            
+            // 设置光标位置（相对于编辑器容器）
+            cursor.style.position = "absolute";
+            cursor.style.top = `${bounds.top}px`;
+            cursor.style.left = `${bounds.left}px`;
+            cursor.style.height = `${bounds.height}px`;
+            cursor.style.width = "2px";
+            cursor.style.backgroundColor = color;
+            cursor.style.zIndex = "10";
+            cursor.style.pointerEvents = "none";
+            
+            // 如果有选区，显示选区高亮
+            if (length > 0) {
+                selection.style.display = "block";
+                selection.style.top = `${bounds.top}px`;
+                selection.style.left = `${bounds.left}px`;
+                selection.style.width = `${bounds.width}px`;
+                selection.style.height = `${bounds.height}px`;
+            } else {
+                selection.style.display = "none";
+            }
+        } catch (e) {
+            console.warn('获取光标位置失败:', e);
+        }
+    } else {
+        // 原有的 textarea 光标位置计算
+        const editor = document.getElementById("editor");
+        if (editor) {
+            const textBefore = editor.value.substring(0, position);
+            const lines = textBefore.split("\n");
+            const lineNum = lines.length - 1;
+            const colNum = lines[lines.length - 1].length;
+
+            const style = getComputedStyle(editor);
+            const lineHeight = parseInt(style.lineHeight || style.fontSize) + 2;
+            const charWidth = measureTextWidth("测", editor);
+
+            cursor.style.top = (lineNum * lineHeight + 10) + "px";
+            cursor.style.left = (colNum * charWidth + 15) + "px";
+            cursor.style.height = lineHeight + "px";
+        }
+    }
+}
+
+// 精确测量字符宽度
+function measureTextWidth(text, element) {
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    const style = getComputedStyle(element);
+    ctx.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+    return ctx.measureText(text).width;
+}
+
+// 导出初始化函数
+window.initEditor = function(doc_id, token = "") {
+    documentId = doc_id;
+    
+    // 如果没有传入 token，尝试从 localStorage 获取
+    if (!token) {
+        token = localStorage.getItem('access_token') || '';
+    }
+    
+    // 连接 WebSocket
+    connect(doc_id, token);
+    
+    // 设置编辑器
+    setupEditor();
+};
+
+// 保持向后兼容的 init 函数
+function init(doc_id, token = "") {
+    window.initEditor(doc_id, token);
+}
+
+==================== 分界线 ====================
+
+文件: toast.js
+路径: D:\Projects\edit\static\toast.js
+内容:
+/**
+ * Toast 通知模块
+ * 提供现代化的提示消息，替代原生 alert()
+ * 
+ * 用法:
+ *   Toast.success('操作成功！');
+ *   Toast.error('操作失败，请重试');
+ *   Toast.warning('请注意此操作');
+ *   Toast.info('提示信息');
+ *   Toast.confirm('确定要删除吗？').then(confirmed => { ... });
+ */
+
+const Toast = (function() {
+    'use strict';
+
+    // 配置
+    const CONFIG = {
+        position: 'top-right',  // 'top-right', 'top-left', 'bottom-right', 'bottom-left', 'top-center'
+        duration: 4000,         // 默认显示时长 (ms)
+        maxToasts: 5,           // 最多同时显示的 Toast 数量
+        animationDuration: 300  // 动画时长 (ms)
+    };
+
+    // Toast 类型图标 (使用 emoji，避免额外依赖)
+    const ICONS = {
+        success: '✅',
+        error: '❌',
+        warning: '⚠️',
+        info: 'ℹ️'
+    };
+
+    // Toast 类型颜色
+    const COLORS = {
+        success: { bg: '#d4edda', border: '#c3e6cb', text: '#155724' },
+        error: { bg: '#f8d7da', border: '#f5c6cb', text: '#721c24' },
+        warning: { bg: '#fff3cd', border: '#ffc107', text: '#856404' },
+        info: { bg: '#d1ecf1', border: '#bee5eb', text: '#0c5460' }
+    };
+
+    let container = null;
+    let toastQueue = [];
+
+    /**
+     * 初始化 Toast 容器
+     */
+    function initContainer() {
+        if (container) return container;
+
+        container = document.createElement('div');
+        container.id = 'toast-container';
+        container.setAttribute('role', 'alert');
+        container.setAttribute('aria-live', 'polite');
+
+        // 根据位置设置样式
+        const positionStyles = {
+            'top-right': 'top: 20px; right: 20px;',
+            'top-left': 'top: 20px; left: 20px;',
+            'bottom-right': 'bottom: 20px; right: 20px;',
+            'bottom-left': 'bottom: 20px; left: 20px;',
+            'top-center': 'top: 20px; left: 50%; transform: translateX(-50%);'
+        };
+
+        container.style.cssText = `
+            position: fixed;
+            ${positionStyles[CONFIG.position] || positionStyles['top-right']}
+            z-index: 10000;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            max-width: 380px;
+            pointer-events: none;
+        `;
+
+        document.body.appendChild(container);
+        return container;
+    }
+
+    /**
+     * 创建 Toast 元素
+     */
+    function createToastElement(message, type, options = {}) {
+        const colors = COLORS[type] || COLORS.info;
+        const icon = ICONS[type] || ICONS.info;
+
+        const toast = document.createElement('div');
+        toast.className = `toast toast-${type}`;
+        toast.style.cssText = `
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 14px 18px;
+            background: ${colors.bg};
+            border: 1px solid ${colors.border};
+            border-left: 4px solid ${colors.border};
+            border-radius: 6px;
+            color: ${colors.text};
+            font-size: 14px;
+            line-height: 1.5;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            opacity: 0;
+            transform: translateX(100%);
+            transition: all ${CONFIG.animationDuration}ms ease;
+            pointer-events: auto;
+            word-break: break-word;
+        `;
+
+        // 图标
+        const iconSpan = document.createElement('span');
+        iconSpan.textContent = icon;
+        iconSpan.style.cssText = 'font-size: 16px; flex-shrink: 0;';
+
+        // 内容区域
+        const content = document.createElement('div');
+        content.style.cssText = 'flex: 1;';
+        
+        // 消息文本
+        const messageEl = document.createElement('div');
+        messageEl.textContent = message;
+        content.appendChild(messageEl);
+
+        // 关闭按钮
+        const closeBtn = document.createElement('button');
+        closeBtn.innerHTML = '&times;';
+        closeBtn.style.cssText = `
+            background: none;
+            border: none;
+            font-size: 20px;
+            color: ${colors.text};
+            cursor: pointer;
+            padding: 0;
+            line-height: 1;
+            opacity: 0.7;
+            transition: opacity 0.2s;
+            flex-shrink: 0;
+        `;
+        closeBtn.addEventListener('mouseenter', () => closeBtn.style.opacity = '1');
+        closeBtn.addEventListener('mouseleave', () => closeBtn.style.opacity = '0.7');
+        closeBtn.addEventListener('click', () => dismissToast(toast));
+
+        toast.appendChild(iconSpan);
+        toast.appendChild(content);
+        toast.appendChild(closeBtn);
+
+        // 进度条 (如果设置了持续时间)
+        if (options.duration !== 0) {
+            const progressBar = document.createElement('div');
+            progressBar.className = 'toast-progress';
+            progressBar.style.cssText = `
+                position: absolute;
+                bottom: 0;
+                left: 0;
+                height: 3px;
+                background: ${colors.border};
+                border-radius: 0 0 0 6px;
+                width: 100%;
+                animation: toast-progress ${options.duration || CONFIG.duration}ms linear forwards;
+            `;
+            toast.style.position = 'relative';
+            toast.style.overflow = 'hidden';
+            toast.appendChild(progressBar);
+        }
+
+        return toast;
+    }
+
+    /**
+     * 显示 Toast
+     */
+    function showToast(message, type, options = {}) {
+        initContainer();
+
+        // 限制最大 Toast 数量
+        while (toastQueue.length >= CONFIG.maxToasts) {
+            const oldToast = toastQueue.shift();
+            dismissToast(oldToast);
+        }
+
+        const toast = createToastElement(message, type, options);
+        container.appendChild(toast);
+        toastQueue.push(toast);
+
+        // 触发入场动画
+        requestAnimationFrame(() => {
+            toast.style.opacity = '1';
+            toast.style.transform = 'translateX(0)';
+        });
+
+        // 自动关闭
+        const duration = options.duration !== undefined ? options.duration : CONFIG.duration;
+        if (duration > 0) {
+            setTimeout(() => dismissToast(toast), duration);
+        }
+
+        return toast;
+    }
+
+    /**
+     * 关闭 Toast
+     */
+    function dismissToast(toast) {
+        if (!toast || !toast.parentNode) return;
+
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateX(100%)';
+
+        setTimeout(() => {
+            if (toast.parentNode) {
+                toast.parentNode.removeChild(toast);
+            }
+            const index = toastQueue.indexOf(toast);
+            if (index > -1) {
+                toastQueue.splice(index, 1);
+            }
+        }, CONFIG.animationDuration);
+    }
+
+    /**
+     * 确认对话框 (替代 confirm())
+     */
+    function showConfirm(message, options = {}) {
+        return new Promise((resolve) => {
+            // 创建遮罩
+            const overlay = document.createElement('div');
+            overlay.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0, 0, 0, 0.5);
+                z-index: 10001;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                animation: fadeIn 0.2s ease;
+            `;
+
+            // 创建对话框
+            const dialog = document.createElement('div');
+            dialog.style.cssText = `
+                background: white;
+                border-radius: 8px;
+                padding: 24px;
+                max-width: 400px;
+                width: 90%;
+                box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+                animation: slideIn 0.3s ease;
+            `;
+
+            // 图标
+            const icon = document.createElement('div');
+            icon.textContent = '❓';
+            icon.style.cssText = 'font-size: 40px; text-align: center; margin-bottom: 16px;';
+
+            // 消息
+            const messageEl = document.createElement('div');
+            messageEl.textContent = message;
+            messageEl.style.cssText = `
+                font-size: 16px;
+                color: #333;
+                text-align: center;
+                margin-bottom: 24px;
+                line-height: 1.5;
+            `;
+
+            // 按钮容器
+            const buttons = document.createElement('div');
+            buttons.style.cssText = 'display: flex; gap: 12px; justify-content: center;';
+
+            // 取消按钮
+            const cancelBtn = document.createElement('button');
+            cancelBtn.textContent = options.cancelText || '取消';
+            cancelBtn.style.cssText = `
+                padding: 10px 24px;
+                border: 1px solid #ddd;
+                border-radius: 6px;
+                background: #f8f9fa;
+                color: #333;
+                font-size: 14px;
+                cursor: pointer;
+                transition: all 0.2s;
+            `;
+            cancelBtn.addEventListener('mouseenter', () => {
+                cancelBtn.style.background = '#e9ecef';
+            });
+            cancelBtn.addEventListener('mouseleave', () => {
+                cancelBtn.style.background = '#f8f9fa';
+            });
+
+            // 确认按钮
+            const confirmBtn = document.createElement('button');
+            confirmBtn.textContent = options.confirmText || '确定';
+            confirmBtn.style.cssText = `
+                padding: 10px 24px;
+                border: none;
+                border-radius: 6px;
+                background: ${options.danger ? '#dc3545' : '#007bff'};
+                color: white;
+                font-size: 14px;
+                cursor: pointer;
+                transition: all 0.2s;
+            `;
+            confirmBtn.addEventListener('mouseenter', () => {
+                confirmBtn.style.background = options.danger ? '#c82333' : '#0056b3';
+            });
+            confirmBtn.addEventListener('mouseleave', () => {
+                confirmBtn.style.background = options.danger ? '#dc3545' : '#007bff';
+            });
+
+            // 关闭函数
+            function close(result) {
+                overlay.style.opacity = '0';
+                setTimeout(() => {
+                    document.body.removeChild(overlay);
+                    resolve(result);
+                }, 200);
+            }
+
+            cancelBtn.addEventListener('click', () => close(false));
+            confirmBtn.addEventListener('click', () => close(true));
+            
+            // ESC 键关闭
+            function handleKeydown(e) {
+                if (e.key === 'Escape') {
+                    close(false);
+                    document.removeEventListener('keydown', handleKeydown);
+                }
+            }
+            document.addEventListener('keydown', handleKeydown);
+
+            buttons.appendChild(cancelBtn);
+            buttons.appendChild(confirmBtn);
+            dialog.appendChild(icon);
+            dialog.appendChild(messageEl);
+            dialog.appendChild(buttons);
+            overlay.appendChild(dialog);
+            document.body.appendChild(overlay);
+
+            // 聚焦确认按钮
+            confirmBtn.focus();
+        });
+    }
+
+    /**
+     * 输入对话框 (替代 prompt())
+     */
+    function showPrompt(message, defaultValue = '', options = {}) {
+        return new Promise((resolve) => {
+            // 创建遮罩
+            const overlay = document.createElement('div');
+            overlay.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0, 0, 0, 0.5);
+                z-index: 10001;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                animation: fadeIn 0.2s ease;
+            `;
+
+            // 创建对话框
+            const dialog = document.createElement('div');
+            dialog.style.cssText = `
+                background: white;
+                border-radius: 8px;
+                padding: 24px;
+                max-width: 400px;
+                width: 90%;
+                box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+                animation: slideIn 0.3s ease;
+            `;
+
+            // 消息
+            const messageEl = document.createElement('div');
+            messageEl.textContent = message;
+            messageEl.style.cssText = `
+                font-size: 16px;
+                color: #333;
+                margin-bottom: 16px;
+                line-height: 1.5;
+            `;
+
+            // 输入框
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.value = defaultValue;
+            input.placeholder = options.placeholder || '';
+            input.style.cssText = `
+                width: 100%;
+                padding: 10px 12px;
+                border: 1px solid #ddd;
+                border-radius: 6px;
+                font-size: 14px;
+                margin-bottom: 20px;
+                box-sizing: border-box;
+                transition: border-color 0.2s;
+            `;
+            input.addEventListener('focus', () => {
+                input.style.borderColor = '#007bff';
+                input.style.outline = 'none';
+            });
+            input.addEventListener('blur', () => {
+                input.style.borderColor = '#ddd';
+            });
+
+            // 按钮容器
+            const buttons = document.createElement('div');
+            buttons.style.cssText = 'display: flex; gap: 12px; justify-content: flex-end;';
+
+            // 取消按钮
+            const cancelBtn = document.createElement('button');
+            cancelBtn.textContent = options.cancelText || '取消';
+            cancelBtn.style.cssText = `
+                padding: 10px 24px;
+                border: 1px solid #ddd;
+                border-radius: 6px;
+                background: #f8f9fa;
+                color: #333;
+                font-size: 14px;
+                cursor: pointer;
+                transition: all 0.2s;
+            `;
+
+            // 确认按钮
+            const confirmBtn = document.createElement('button');
+            confirmBtn.textContent = options.confirmText || '确定';
+            confirmBtn.style.cssText = `
+                padding: 10px 24px;
+                border: none;
+                border-radius: 6px;
+                background: #007bff;
+                color: white;
+                font-size: 14px;
+                cursor: pointer;
+                transition: all 0.2s;
+            `;
+
+            // 关闭函数
+            function close(result) {
+                overlay.style.opacity = '0';
+                setTimeout(() => {
+                    document.body.removeChild(overlay);
+                    resolve(result);
+                }, 200);
+            }
+
+            cancelBtn.addEventListener('click', () => close(null));
+            confirmBtn.addEventListener('click', () => close(input.value));
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') close(input.value);
+                if (e.key === 'Escape') close(null);
+            });
+
+            buttons.appendChild(cancelBtn);
+            buttons.appendChild(confirmBtn);
+            dialog.appendChild(messageEl);
+            dialog.appendChild(input);
+            dialog.appendChild(buttons);
+            overlay.appendChild(dialog);
+            document.body.appendChild(overlay);
+
+            // 聚焦并选中输入框
+            input.focus();
+            input.select();
+        });
+    }
+
+    // 添加动画样式
+    function addStyles() {
+        if (document.getElementById('toast-styles')) return;
+        
+        const style = document.createElement('style');
+        style.id = 'toast-styles';
+        style.textContent = `
+            @keyframes toast-progress {
+                from { width: 100%; }
+                to { width: 0%; }
+            }
+            @keyframes fadeIn {
+                from { opacity: 0; }
+                to { opacity: 1; }
+            }
+            @keyframes slideIn {
+                from { 
+                    opacity: 0;
+                    transform: scale(0.9) translateY(-20px);
+                }
+                to { 
+                    opacity: 1;
+                    transform: scale(1) translateY(0);
+                }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+    // 初始化样式
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', addStyles);
+    } else {
+        addStyles();
+    }
+
+    // 公共 API
+    return {
+        success: (message, options) => showToast(message, 'success', options),
+        error: (message, options) => showToast(message, 'error', options),
+        warning: (message, options) => showToast(message, 'warning', options),
+        info: (message, options) => showToast(message, 'info', options),
+        confirm: showConfirm,
+        prompt: showPrompt,
+        dismiss: dismissToast,
+        
+        // 配置方法
+        config: (options) => {
+            Object.assign(CONFIG, options);
+        }
+    };
+})();
+
+// 如果使用模块系统，导出 Toast
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = Toast;
+}

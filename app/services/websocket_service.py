@@ -93,9 +93,14 @@ class ConnectionManager:
                 get_document_crdt(document_id).remove_client(conn.client_id)
 
         if not self.active_connections.get(document_id):
-            # 房间为空，标记为脏并强制保存一次
-            await self.mark_dirty(document_id)
+            # 🔥 修复 Issue C: 房间为空时立即同步保存,不依赖后台任务
+            logger.info(f"📤 房间 {document_id} 已空,最后一人离开,触发立即保存")
+            
+            # 使用新的 save_document_now() 方法
+            await self.save_document_now(document_id)
+            
             self.active_connections.pop(document_id, None)
+            logger.info(f"🧹 房间 {document_id} 已清理")
         else:
             # 仍有其他连接，无需强制保存，但广播离开事件
             for conn in list(self.active_connections.get(document_id, [])):
@@ -276,9 +281,51 @@ class ConnectionManager:
         """标记文档为脏，稍后由后台任务持久化"""
         async with self._dirty_lock:
             self.dirty_docs.add(document_id)
+    
+    async def save_document_now(self, document_id: int) -> bool:
+        """🔥 修复 Issue C: 立即同步保存文档 (不依赖后台任务)
+        
+        用于关键时刻的数据持久化:
+        - 最后一个用户断开连接时
+        - 服务器即将关闭时
+        - 用户明确请求保存时
+        
+        Returns:
+            bool: 保存是否成功
+        """
+        try:
+            db = None
+            try:
+                db = get_db_connection()
+                # 获取CRDT当前文本
+                doc_crdt = get_document_crdt(document_id)
+                content = doc_crdt.master_crdt.to_text()
+                content_size = len(content)
+                
+                logger.info(f"⚡ 立即同步保存文档 {document_id} ({content_size} 字节)")
+                
+                # 使用内部更新函数（无权限检查,包含 commit）
+                success = update_document_internal(db, document_id, content)
+                
+                if success:
+                    logger.info(f"✅ 文档 {document_id} 立即保存成功")
+                    # 从脏文档列表中移除
+                    async with self._dirty_lock:
+                        self.dirty_docs.discard(document_id)
+                else:
+                    logger.warning(f"⚠️ 文档 {document_id} 保存返回 False")
+                
+                return success
+            finally:
+                if db:
+                    close_connection_safely(db)
+        except Exception as e:
+            logger.exception(f"❌ 立即保存文档 {document_id} 失败: {e}")
+            return False
 
     async def background_save_task(self, interval_seconds: int = 5) -> None:
         """后台周期性保存脏文档到数据库"""
+        logger.info(f"🚀 后台保存任务已启动 (间隔: {interval_seconds}秒)")
         while True:
             try:
                 await asyncio.sleep(interval_seconds)
@@ -289,6 +336,8 @@ class ConnectionManager:
 
                 if not to_save:
                     continue
+                
+                logger.info(f"💾 后台保存: 发现 {len(to_save)} 个待保存文档")
 
                 for doc_id in to_save:
                     try:
@@ -298,15 +347,18 @@ class ConnectionManager:
                             # 获取CRDT当前文本
                             doc_crdt = get_document_crdt(doc_id)
                             content = doc_crdt.master_crdt.to_text()
+                            content_size = len(content)
+                            logger.info(f"📝 准备保存文档 {doc_id} ({content_size} 字节)")
                             # 使用内部更新函数（无权限检查）
                             update_document_internal(db, doc_id, content)
+                            logger.info(f"✅ 后台保存文档 {doc_id} 完成")
                         finally:
                             if db:
                                 close_connection_safely(db)
                     except Exception as e:
-                        logger.exception(f"后台保存文档 {doc_id} 失败: {e}")
+                        logger.exception(f"❌ 后台保存文档 {doc_id} 失败: {e}")
             except asyncio.CancelledError:
-                logger.info("后台保存任务已取消")
+                logger.info("🛑 后台保存任务已取消")
                 break
             except Exception as e:
-                logger.exception(f"后台保存任务异常: {e}")
+                logger.exception(f"❌ 后台保存任务异常: {e}")

@@ -30,7 +30,7 @@ _ws_background_save_task = None
 @app.on_event("startup")
 async def on_startup() -> None:
     """Initialize the database before serving requests."""
-    global _ws_cleanup_task, _ws_heartbeat_task
+    global _ws_cleanup_task, _ws_heartbeat_task, _ws_background_save_task
     
     init_db()
     
@@ -45,11 +45,16 @@ async def on_startup() -> None:
     
     # 启动 WebSocket 服务层的后台保存任务（如果可用）
     try:
-        if getattr(ws, 'manager', None) and _ws_background_save_task is None:
-            _ws_background_save_task = asyncio.create_task(ws.manager.background_save_task())
-            print("WebSocket 后台保存任务已启动")
+        if getattr(ws, 'manager', None):
+            if _ws_background_save_task is None or _ws_background_save_task.done():
+                _ws_background_save_task = asyncio.create_task(ws.manager.background_save_task())
+                print("✅ WebSocket 后台保存任务已启动")
+        else:
+            print("⚠️ 警告: ws.manager 不存在,后台保存任务未启动")
     except Exception as e:
-        print(f"启动后台保存任务失败: {e}")
+        print(f"❌ 启动后台保存任务失败: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 @app.on_event("shutdown")
